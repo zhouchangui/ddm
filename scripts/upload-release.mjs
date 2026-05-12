@@ -14,7 +14,7 @@
  */
 
 import fs from 'node:fs/promises'
-import { createReadStream, createHash } from 'node:fs'
+import { createReadStream } from 'node:fs'
 import crypto from 'node:crypto'
 import path from 'node:path'
 import process from 'node:process'
