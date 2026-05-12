@@ -358,8 +358,7 @@ function ApiMethod(props: ApiMethodProps) {
           opencode: (
             <box gap={1}>
               <text fg={theme.textMuted}>
-                OpenCode Zen gives you access to all the best coding models at the cheapest prices with a single API
-                key.
+                百搭智能模型服务 gives you access to curated coding models with a single API key.
               </text>
               <text fg={theme.text}>
                 Go to <span style={{ fg: theme.primary }}>https://opencode.ai/zen</span> to get a key
@@ -369,11 +368,10 @@ function ApiMethod(props: ApiMethodProps) {
           "opencode-go": (
             <box gap={1}>
               <text fg={theme.textMuted}>
-                OpenCode Go is a $10 per month subscription that provides reliable access to popular open coding models
-                with generous usage limits.
+                百搭智能订阅 provides reliable access to popular open coding models with generous usage limits.
               </text>
               <text fg={theme.text}>
-                Go to <span style={{ fg: theme.primary }}>https://opencode.ai/zen</span> and enable OpenCode Go
+                Go to <span style={{ fg: theme.primary }}>https://opencode.ai/zen</span> and enable 百搭智能订阅
               </text>
             </box>
           ),

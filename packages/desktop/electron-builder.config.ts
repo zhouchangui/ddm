@@ -54,7 +54,7 @@ const getBase = (): Configuration => ({
     sign: true,
   },
   protocols: {
-    name: "OpenCode",
+    name: "百搭智能",
     schemes: ["opencode"],
   },
   win: {
@@ -86,7 +86,7 @@ function getConfig() {
       return {
         ...base,
         appId: "ai.opencode.desktop.dev",
-        productName: "OpenCode Dev",
+        productName: "百搭智能开发版",
         rpm: { packageName: "opencode-dev" },
       }
     }
@@ -94,8 +94,8 @@ function getConfig() {
       return {
         ...base,
         appId: "ai.opencode.desktop.beta",
-        productName: "OpenCode Beta",
-        protocols: { name: "OpenCode Beta", schemes: ["opencode"] },
+        productName: "百搭智能测试版",
+        protocols: { name: "百搭智能测试版", schemes: ["opencode"] },
         publish: { provider: "github", owner: "anomalyco", repo: "opencode-beta", channel: "latest" },
         rpm: { packageName: "opencode-beta" },
       }
@@ -104,8 +104,8 @@ function getConfig() {
       return {
         ...base,
         appId: "ai.opencode.desktop",
-        productName: "OpenCode",
-        protocols: { name: "OpenCode", schemes: ["opencode"] },
+        productName: "百搭智能",
+        protocols: { name: "百搭智能", schemes: ["opencode"] },
         publish: { provider: "github", owner: "anomalyco", repo: "opencode", channel: "latest" },
         rpm: { packageName: "opencode" },
       }

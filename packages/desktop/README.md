@@ -1,6 +1,6 @@
-# OpenCode Desktop
+# 百搭智能桌面端
 
-The OpenCode Desktop app, built with Electron.
+The 百搭智能桌面端 app, built with Electron.
 
 ## Development
 
