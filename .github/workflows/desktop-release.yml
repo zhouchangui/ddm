@@ -72,6 +72,7 @@ jobs:
         working-directory: packages/desktop
         env:
           OPENCODE_CHANNEL: prod
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: bun run package:win
 
       - name: Upload artifacts
