@@ -60,13 +60,17 @@ jobs:
         env:
           OPENCODE_CHANNEL: prod
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          CSC_LINK: ${{ secrets.MAC_CERTS }}
-          CSC_KEY_PASSWORD: ${{ secrets.MAC_CERTS_PASSWORD }}
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          CSC_LINK: ${{ secrets.MAC_CERTS || '' }}
+          CSC_KEY_PASSWORD: ${{ secrets.MAC_CERTS_PASSWORD || '' }}
+          APPLE_ID: ${{ secrets.APPLE_ID || '' }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD || '' }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID || '' }}
         run: |
           ulimit -n 65536
+          # Skip code signing if no certificate is configured
+          if [ -z "${CSC_LINK}" ]; then
+            export CSC_IDENTITY_AUTO_DISCOVERY=false
+          fi
           bun run package:mac
 
       - name: Package Windows
