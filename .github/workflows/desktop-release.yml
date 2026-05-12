@@ -1,0 +1,184 @@
+name: Desktop Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to release (e.g. 1.2.3)'
+        required: true
+
+permissions:
+  contents: write
+  actions: read
+
+concurrency:
+  group: desktop-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  # ─────────────────────────────────────────────
+  # Build macOS (arm64) and Windows (x64) in parallel
+  # ─────────────────────────────────────────────
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            platform: mac
+            pkg_cmd: package:mac
+          - os: windows-latest
+            platform: win
+            pkg_cmd: package:win
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: package.json
+
+      - name: Install dependencies
+        run: bun install
+
+      - name: Build (electron-vite)
+        working-directory: packages/desktop
+        env:
+          OPENCODE_CHANNEL: prod
+        run: bun run build
+
+      - name: Package macOS
+        if: matrix.platform == 'mac'
+        working-directory: packages/desktop
+        env:
+          OPENCODE_CHANNEL: prod
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CSC_LINK: ${{ secrets.MAC_CERTS }}
+          CSC_KEY_PASSWORD: ${{ secrets.MAC_CERTS_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          ulimit -n 65536
+          bun run package:mac
+
+      - name: Package Windows
+        if: matrix.platform == 'win'
+        working-directory: packages/desktop
+        env:
+          OPENCODE_CHANNEL: prod
+        run: bun run package:win
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: desktop-${{ matrix.platform }}
+          retention-days: 7
+          path: |
+            packages/desktop/dist/*.dmg
+            packages/desktop/dist/*.zip
+            packages/desktop/dist/*.exe
+            packages/desktop/dist/*.blockmap
+            !packages/desktop/dist/builder-debug.yml
+
+  # ─────────────────────────────────────────────
+  # Create GitHub Release
+  # ─────────────────────────────────────────────
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-artifacts
+          pattern: desktop-*
+
+      - name: List artifacts
+        run: find release-artifacts/ -type f | sort
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        if: startsWith(github.ref, 'refs/tags/')
+        with:
+          files: |
+            release-artifacts/**/*.dmg
+            release-artifacts/**/*.zip
+            release-artifacts/**/*.exe
+          draft: false
+          prerelease: false
+          make_latest: true
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # ─────────────────────────────────────────────
+  # Upload to R2 (replaces existing version)
+  # ─────────────────────────────────────────────
+  upload-r2:
+    needs: build
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install upload dependencies
+        run: |
+          mkdir -p .upload-deps
+          echo '{"name":"upload-deps","private":true}' > .upload-deps/package.json
+          npm install --prefix .upload-deps --no-package-lock --no-save @aws-sdk/client-s3
+          ln -s .upload-deps/node_modules node_modules || true
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-artifacts
+          pattern: desktop-*
+
+      - name: Flatten artifacts into staging/
+        run: |
+          mkdir -p staging
+          find release-artifacts/ -type f \( \
+            -name "*.dmg" -o \
+            -name "*.zip" -o \
+            -name "*.exe" \
+          \) -exec cp {} staging/ \;
+          echo "=== Staging files ==="
+          ls -lh staging/
+
+      - name: Resolve version
+        id: version
+        run: |
+          if [[ "${{ github.ref }}" == refs/tags/v* ]]; then
+            echo "version=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
+          else
+            echo "version=${{ github.event.inputs.version }}" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Upload to R2
+        env:
+          R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_BUCKET: ${{ secrets.R2_BUCKET }}
+          R2_PUBLIC_BASE_URL: ${{ secrets.R2_PUBLIC_BASE_URL }}
+        run: |
+          node scripts/upload-release.mjs \
+            --artifacts-dir staging \
+            --version ${{ steps.version.outputs.version }} \
+            --prefix releases/exec
+
+      - name: Show upload results
+        run: cat upload-results.json

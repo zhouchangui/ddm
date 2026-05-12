@@ -27,7 +27,7 @@ const channel = (() => {
 })()
 
 const getBase = (): Configuration => ({
-  artifactName: "opencode-desktop-${os}-${arch}.${ext}",
+  artifactName: "ddm-${os}-${arch}.${ext}",
   directories: {
     output: "dist",
     buildResources: "resources",
