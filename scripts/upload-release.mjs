@@ -120,9 +120,15 @@ async function main() {
 
   const results = []
   for (const name of files) {
-    const filePath  = path.join(artifactsDir, name)
-    // Replace existing version with new one: releases/exec/ddm-mac-arm64.dmg (no timestamp)
-    const objectKey = `${prefix}/${name}`
+    const filePath = path.join(artifactsDir, name)
+
+    // Insert version into filename: ddm-mac-arm64.dmg → ddm-1.14.52-mac-arm64.dmg
+    // Pattern: ddm-<platform>.<ext>  →  ddm-<version>-<platform>.<ext>
+    const ext = path.extname(name)
+    const base = path.basename(name, ext)
+    const versionedName = base.replace(/^(ddm-)/, `$1${version}-`) + ext
+    const objectKey = `${prefix}/${versionedName}`
+
     console.log(`Uploading ${name} → ${objectKey} ...`)
     const result = await uploadFile(client, cfg, filePath, objectKey)
     console.log(`  ✓ ${result.publicUrl}  (${(result.sizeBytes / 1024 / 1024).toFixed(1)} MB)`)
