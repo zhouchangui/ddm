@@ -1,15 +1,13 @@
 import type { Session } from "@opencode-ai/sdk/v2/client"
-import { Avatar } from "@opencode-ai/ui/avatar"
 import { Icon } from "@opencode-ai/ui/icon"
 import { IconButton } from "@opencode-ai/ui/icon-button"
 import { Spinner } from "@opencode-ai/ui/spinner"
 import { Tooltip } from "@opencode-ai/ui/tooltip"
-import { getFilename } from "@opencode-ai/core/util/path"
 import { A, useParams } from "@solidjs/router"
 import { type Accessor, createMemo, For, type JSX, Match, Show, Switch } from "solid-js"
 import { useGlobalSync } from "@/context/global-sync"
 import { useLanguage } from "@/context/language"
-import { getAvatarColors, type LocalProject, useLayout } from "@/context/layout"
+import { type LocalProject, useLayout } from "@/context/layout"
 import { useNotification } from "@/context/notification"
 import { usePermission } from "@/context/permission"
 import { messageAgentColor } from "@/utils/agent"
@@ -20,7 +18,7 @@ import { childSessionOnPath, hasProjectPermissions } from "./helpers"
 const OPENCODE_PROJECT_ID = "4b0ea68d7af9a6031a7ffda7ad66e0cb83315750"
 
 export function getProjectAvatarSource(id?: string, icon?: { color?: string; url?: string; override?: string }) {
-  if (id === OPENCODE_PROJECT_ID) return "https://opencode.ai/favicon.svg"
+  if (id === OPENCODE_PROJECT_ID) return "/favicon.svg"
   if (icon?.override) return icon?.override
   if (icon?.color) return undefined
   return icon?.url
@@ -47,18 +45,14 @@ export const ProjectIcon = (props: {
     }),
   )
   const notify = createMemo(() => props.notify && (hasPermissions() || unseenCount() > 0))
-  const name = createMemo(() => props.project.name || getFilename(props.project.worktree))
 
   return (
     <div class={`relative size-8 shrink-0 rounded ${props.class ?? ""}`}>
-      <div class="size-full rounded overflow-clip">
-        <Avatar
-          fallback={name()}
-          src={getProjectAvatarSource(props.project.id, props.project.icon)}
-          {...getAvatarColors(props.project.icon?.color)}
-          class="size-full rounded"
-          classList={{ "badge-mask": notify() }}
-        />
+      <div
+        class="size-full rounded overflow-clip flex items-center justify-center bg-surface-base text-icon-base"
+        classList={{ "badge-mask": notify() }}
+      >
+        <Icon name="folder" size="large" />
       </div>
       <Show when={notify()}>
         <div

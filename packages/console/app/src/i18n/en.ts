@@ -41,8 +41,8 @@ export const dict = {
   "notFound.docs": "Docs",
   "notFound.github": "GitHub",
   "notFound.discord": "Discord",
-  "notFound.logoLightAlt": "opencode logo light",
-  "notFound.logoDarkAlt": "opencode logo dark",
+  "notFound.logoLightAlt": "DDM logo light",
+  "notFound.logoDarkAlt": "DDM logo dark",
 
   "user.logout": "Logout",
 
@@ -97,8 +97,8 @@ export const dict = {
   "temp.feature.models.afterLink": ", including local models",
   "temp.screenshot.caption": "opencode TUI with the tokyonight theme",
   "temp.screenshot.alt": "opencode TUI with tokyonight theme",
-  "temp.logoLightAlt": "opencode logo light",
-  "temp.logoDarkAlt": "opencode logo dark",
+  "temp.logoLightAlt": "DDM logo light",
+  "temp.logoDarkAlt": "DDM logo dark",
 
   "home.banner.badge": "New",
   "home.banner.text": "Desktop app available in beta",

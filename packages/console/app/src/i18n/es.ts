@@ -43,8 +43,8 @@ export const dict = {
   "notFound.docs": "Documentación",
   "notFound.github": "GitHub",
   "notFound.discord": "Discord",
-  "notFound.logoLightAlt": "opencode logo claro",
-  "notFound.logoDarkAlt": "opencode logo oscuro",
+  "notFound.logoLightAlt": "DDM logo claro",
+  "notFound.logoDarkAlt": "DDM logo oscuro",
 
   "user.logout": "Cerrar sesión",
 
@@ -98,8 +98,8 @@ export const dict = {
   "temp.feature.models.afterLink": ", incluyendo modelos locales",
   "temp.screenshot.caption": "opencode TUI con el tema tokyonight",
   "temp.screenshot.alt": "opencode TUI con tema tokyonight",
-  "temp.logoLightAlt": "logo de opencode claro",
-  "temp.logoDarkAlt": "logo de opencode oscuro",
+  "temp.logoLightAlt": "logo de DDM claro",
+  "temp.logoDarkAlt": "logo de DDM oscuro",
 
   "home.banner.badge": "Nuevo",
   "home.banner.text": "Aplicación de escritorio disponible en beta",

@@ -78,7 +78,7 @@ export const SidebarContent = (props: {
                 }
               >
                 <IconButton
-                  icon="plus"
+                  icon="folder-add-left"
                   variant="ghost"
                   size="large"
                   onClick={props.onOpenProject}
