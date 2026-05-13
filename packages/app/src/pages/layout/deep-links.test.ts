@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { parseAgentImportDeepLink } from "./deep-links"
+import { parseAgentImportDeepLink, parseDeepLink, parseNewSessionDeepLink } from "./deep-links"
 
 describe("agent import deep links", () => {
   test("parses homepage market import-agent links", () => {
@@ -19,6 +19,28 @@ describe("agent import deep links", () => {
       packageUrl: "https://example.test/agent.zip",
       name: undefined,
       source: undefined,
+    })
+  })
+})
+
+// Regression: ISSUE-001 — ddm:// URLs incorrectly parsed as opencode:// deep links
+// Found by /qa on 2026-05-13
+// Report: .gstack/qa-reports/qa-report-ddm-import-2026-05-13.md
+describe("scheme isolation: ddm:// must not trigger opencode:// actions", () => {
+  test("ddm://open-project does NOT open a project directory", () => {
+    expect(parseDeepLink("ddm://open-project?directory=/etc/passwd")).toBeUndefined()
+    expect(parseDeepLink("ddm://open-project?directory=/tmp/malicious")).toBeUndefined()
+  })
+
+  test("ddm://new-session does NOT create a new session", () => {
+    expect(parseNewSessionDeepLink("ddm://new-session?directory=/tmp&prompt=hello")).toBeUndefined()
+  })
+
+  test("opencode:// links still work normally", () => {
+    expect(parseDeepLink("opencode://open-project?directory=/tmp/demo")).toBe("/tmp/demo")
+    expect(parseNewSessionDeepLink("opencode://new-session?directory=/tmp&prompt=hello")).toEqual({
+      directory: "/tmp",
+      prompt: "hello",
     })
   })
 })
