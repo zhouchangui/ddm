@@ -18,6 +18,7 @@ import { registerIpcHandlers, sendDeepLinks, sendMenuCommand, sendSqliteMigratio
 import { initLogging } from "./logging"
 import { parseMarkdown } from "./markdown"
 import { createMenu } from "./menu"
+import { ensureDdmLogin } from "./ddm-login"
 import {
   getDefaultServerUrl,
   getWslConfig,
@@ -44,9 +45,9 @@ const APP_NAMES: Record<string, string> = {
   prod: "百搭智能",
 }
 const APP_IDS: Record<string, string> = {
-  dev: "ai.opencode.desktop.dev",
-  beta: "ai.opencode.desktop.beta",
-  prod: "ai.opencode.desktop",
+  dev: "run.bothub.desktop.dev",
+  beta: "run.bothub.desktop.beta",
+  prod: "run.bothub.desktop",
 }
 const TEST_ONBOARDING = process.env.OPENCODE_TEST_ONBOARDING === "1"
 
@@ -117,7 +118,7 @@ const main = Effect.gen(function* () {
 
   process.env.OPENCODE_DISABLE_EMBEDDED_WEB_UI = "true"
 
-  const appId = app.isPackaged ? APP_IDS[CHANNEL] : "ai.opencode.desktop.dev"
+  const appId = app.isPackaged ? APP_IDS[CHANNEL] : "run.bothub.desktop.dev"
   const onboardingTestRoot = ((): string | undefined => {
     if (!TEST_ONBOARDING) return
 
@@ -184,11 +185,10 @@ const main = Effect.gen(function* () {
     emitDeepLinks([url])
   })
 
-  app.on("before-quit", () => {
-    void killSidecar()
-  })
+  // macOS: 关闭所有窗口时不退出（登录窗口关闭后 app 应继续运行）
+  app.on("window-all-closed", () => {})
 
-  app.on("will-quit", () => {
+  app.on("before-quit", () => {
     void killSidecar()
   })
 
@@ -239,6 +239,9 @@ const main = Effect.gen(function* () {
   })
 
   yield* Effect.promise(() => app.whenReady())
+
+  // DDM 登录检查：app ready 后才能创建 BrowserWindow
+  yield* Effect.promise(() => ensureDdmLogin())
 
   if (!TEST_ONBOARDING) migrate()
   app.setAsDefaultProtocolClient("opencode")

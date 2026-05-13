@@ -1,0 +1,31 @@
+{
+  "name": "@ddm/cli",
+  "version": "0.1.0",
+  "description": "DDM agent 打包、导入和平台登录工具",
+  "type": "module",
+  "bin": {
+    "ddm": "./bin/ddm"
+  },
+  "scripts": {
+    "dev": "bun run src/index.ts",
+    "build": "bun build src/index.ts --outfile bin/ddm --target node",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@clack/prompts": "1.0.0-alpha.1",
+    "execa": "9.6.1",
+    "gray-matter": "4.0.3",
+    "jsonc-parser": "3.3.1",
+    "jszip": "3.10.1",
+    "open": "10.1.2",
+    "yargs": "18.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "22.0.0",
+    "@types/yargs": "17.0.33",
+    "typescript": "5.7.3"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

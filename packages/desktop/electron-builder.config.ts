@@ -85,7 +85,7 @@ function getConfig() {
     case "dev": {
       return {
         ...base,
-        appId: "ai.opencode.desktop.dev",
+        appId: "run.bothub.desktop.dev",
         productName: "百搭智能开发版",
         rpm: { packageName: "opencode-dev" },
       }
@@ -93,7 +93,7 @@ function getConfig() {
     case "beta": {
       return {
         ...base,
-        appId: "ai.opencode.desktop.beta",
+        appId: "run.bothub.desktop.beta",
         productName: "百搭智能测试版",
         protocols: { name: "百搭智能测试版", schemes: ["opencode"] },
         publish: { provider: "github", owner: "anomalyco", repo: "opencode-beta", channel: "latest" },
@@ -103,7 +103,7 @@ function getConfig() {
     case "prod": {
       return {
         ...base,
-        appId: "ai.opencode.desktop",
+        appId: "run.bothub.desktop",
         productName: "百搭智能",
         protocols: { name: "百搭智能", schemes: ["opencode"] },
         publish: { provider: "github", owner: "anomalyco", repo: "opencode", channel: "latest" },
