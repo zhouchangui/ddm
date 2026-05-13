@@ -1,7 +1,7 @@
 export const deepLinkEvent = "opencode:deep-link"
 
 const parseUrl = (input: string) => {
-  if (!input.startsWith("opencode://")) return
+  if (!input.startsWith("opencode://") && !input.startsWith("ddm://")) return
   if (typeof URL.canParse === "function" && !URL.canParse(input)) return
   try {
     return new URL(input)
@@ -35,6 +35,20 @@ export const collectOpenProjectDeepLinks = (urls: string[]) =>
 
 export const collectNewSessionDeepLinks = (urls: string[]) =>
   urls.map(parseNewSessionDeepLink).filter((link): link is { directory: string; prompt?: string } => !!link)
+
+export const parseAgentImportDeepLink = (input: string) => {
+  const url = parseUrl(input)
+  if (!url) return
+  if (url.protocol !== "ddm:") return
+  if (url.hostname !== "import" && url.hostname !== "import-agent") return
+  const packageUrl = url.searchParams.get("pkg") ?? url.searchParams.get("url")
+  if (!packageUrl) return
+  return {
+    packageUrl,
+    name: url.searchParams.get("name") || undefined,
+    source: url.searchParams.get("source") || undefined,
+  }
+}
 
 type OpenCodeWindow = Window & {
   __OPENCODE__?: {

@@ -55,7 +55,7 @@ const getBase = (): Configuration => ({
   },
   protocols: {
     name: "百搭智能",
-    schemes: ["opencode"],
+    schemes: ["opencode", "ddm"],
   },
   win: {
     icon: `resources/icons/icon.ico`,
@@ -95,7 +95,7 @@ function getConfig() {
         ...base,
         appId: "run.bothub.desktop.beta",
         productName: "百搭智能测试版",
-        protocols: { name: "百搭智能测试版", schemes: ["opencode"] },
+        protocols: { name: "百搭智能测试版", schemes: ["opencode", "ddm"] },
         publish: { provider: "github", owner: "anomalyco", repo: "opencode-beta", channel: "latest" },
         rpm: { packageName: "opencode-beta" },
       }
@@ -105,7 +105,7 @@ function getConfig() {
         ...base,
         appId: "run.bothub.desktop",
         productName: "百搭智能",
-        protocols: { name: "百搭智能", schemes: ["opencode"] },
+        protocols: { name: "百搭智能", schemes: ["opencode", "ddm"] },
         publish: { provider: "github", owner: "anomalyco", repo: "opencode", channel: "latest" },
         rpm: { packageName: "opencode" },
       }
