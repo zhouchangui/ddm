@@ -19,10 +19,33 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  version:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.resolve.outputs.version }}
+    steps:
+      - name: Resolve version
+        id: resolve
+        shell: bash
+        run: |
+          if [[ "${{ github.ref }}" == refs/tags/v* ]]; then
+            echo "version=${GITHUB_REF#refs/tags/v}" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          version="${{ github.event.inputs.version }}"
+          if [[ -z "$version" ]]; then
+            echo "workflow_dispatch requires version input" >&2
+            exit 1
+          fi
+
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
   # ─────────────────────────────────────────────
   # Build macOS (arm64) and Windows (x64) in parallel
   # ─────────────────────────────────────────────
   build:
+    needs: version
     strategy:
       fail-fast: false
       matrix:
@@ -44,6 +67,45 @@ jobs:
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version-file: package.json
+
+      - name: Sync workspace package versions
+        shell: bash
+        env:
+          RELEASE_VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          node <<'NODE'
+          const fs = require("node:fs")
+          const path = require("node:path")
+
+          const version = process.env.RELEASE_VERSION?.trim()
+          if (!version) throw new Error("RELEASE_VERSION is required")
+
+          const repoRoot = process.cwd()
+          const ignored = new Set(["node_modules", "dist", ".git"])
+
+          function visit(dir) {
+            for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+              if (ignored.has(entry.name)) continue
+              const full = path.join(dir, entry.name)
+              if (entry.isDirectory()) {
+                visit(full)
+                continue
+              }
+
+              if (entry.name !== "package.json") continue
+
+              const raw = fs.readFileSync(full, "utf8")
+              const pkg = JSON.parse(raw)
+              if (typeof pkg.version !== "string") continue
+              if (pkg.version === version) continue
+              pkg.version = version
+              fs.writeFileSync(full, `${JSON.stringify(pkg, null, 2)}\n`)
+              console.log(`updated ${path.relative(repoRoot, full)} -> ${version}`)
+            }
+          }
+
+          visit(repoRoot)
+          NODE
 
       - name: Install dependencies
         run: bun install
@@ -123,7 +185,9 @@ jobs:
   # Upload to R2 (replaces existing version)
   # ─────────────────────────────────────────────
   upload-r2:
-    needs: build
+    needs:
+      - build
+      - version
     runs-on: ubuntu-latest
 
     steps:
@@ -157,15 +221,6 @@ jobs:
           echo "=== Staging files ==="
           ls -lh staging/
 
-      - name: Resolve version
-        id: version
-        run: |
-          if [[ "${{ github.ref }}" == refs/tags/v* ]]; then
-            echo "version=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
-          else
-            echo "version=${{ github.event.inputs.version }}" >> $GITHUB_OUTPUT
-          fi
-
       - name: Upload to R2
         env:
           R2_ENDPOINT: ${{ vars.R2_ENDPOINT }}
@@ -176,7 +231,7 @@ jobs:
         run: |
           node scripts/upload-release.mjs \
             --artifacts-dir staging \
-            --version ${{ steps.version.outputs.version }} \
+            --version ${{ needs.version.outputs.version }} \
             --prefix releases/exec
 
       - name: Show upload results
