@@ -4,6 +4,14 @@
 - Local `main` ref may not exist; use `dev` or `origin/dev` for diffs.
 - Prefer automation: execute requested actions without confirmation unless blocked by missing info or safety/irreversibility.
 
+## Fork and Rebrand Maintenance
+
+This project is forked from OpenCode and rebranded as DDM. We expect to keep merging upstream OpenCode changes over time.
+
+When adding DDM-specific features, preserve upstream structure and behavior as much as possible. Prefer new modules, wrappers, adapters, configuration, and isolated integration points over large edits to upstream-owned files. If an upstream file must be changed, keep the patch small, clearly scoped, and easy to reapply during future upstream merges. Avoid broad refactors, formatting churn, renames, or style changes in upstream code unless they are required for the feature.
+
+The goal is to reduce merge conflicts while keeping DDM extensions visible and maintainable.
+
 ## Style Guide
 
 ### General Principles

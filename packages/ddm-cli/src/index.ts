@@ -1,7 +1,7 @@
 import yargs from "yargs"
 import { hideBin } from "yargs/helpers"
 import { cmdPack, cmdUnpack } from "./cmd/pack.js"
-import { cmdLogin, cmdSetup, cmdImport } from "./cmd/auth.js"
+import { cmdLogin, cmdSetup, cmdImport, cmdPreview } from "./cmd/auth.js"
 
 yargs(hideBin(process.argv))
   .scriptName("ddm")
@@ -101,13 +101,45 @@ yargs(hideBin(process.argv))
     "import <input>",
     "从 ddm:// 协议 URL 或本地 zip 文件导入 agent",
     (y) =>
+      y
+        .positional("input", {
+          type: "string",
+          describe: "ddm://import?pkg=<url>、ddm://import-agent?url=<url> 或 /path/to/file.zip",
+          demandOption: true,
+        })
+        .option("yes", {
+          alias: "y",
+          type: "boolean",
+          default: false,
+          describe: "跳过确认提示，直接导入",
+        })
+        .option("target", {
+          alias: "t",
+          type: "string",
+          describe: "目标目录（默认为全局 OpenCode 配置目录，指定后会在该目录创建 .opencode/）",
+        })
+        .option("skip-deps", {
+          type: "boolean",
+          default: false,
+          describe: "只恢复 agent 文件，跳过 dependencies 安装和配置（用于离线验证）",
+        }),
+    async (args) => {
+      await cmdImport(args.input as string, { target: args.target, yes: args.yes, skipDeps: args["skip-deps"] })
+    },
+  )
+
+  // ─── preview ───────────────────────────────────────────────
+  .command(
+    "preview <input>",
+    "读取 ddm:// 协议 URL 或本地 zip 文件中的 manifest.json",
+    (y) =>
       y.positional("input", {
         type: "string",
-        describe: "ddm://import?pkg=<url> 或 /path/to/file.zip",
+        describe: "ddm://import?pkg=<url>、ddm://import-agent?url=<url> 或 /path/to/file.zip",
         demandOption: true,
       }),
     async (args) => {
-      await cmdImport(args.input as string)
+      await cmdPreview(args.input as string)
     },
   )
 

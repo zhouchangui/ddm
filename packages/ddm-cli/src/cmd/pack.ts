@@ -37,9 +37,9 @@ function walkDir(dir: string, ext: string): string[] {
   return results
 }
 
-function resolveOpencodeConfig(): string {
+function resolveOpencodeConfig(baseDir = process.cwd()): string {
   // 查找最近的 .opencode/opencode.jsonc
-  let cur = process.cwd()
+  let cur = baseDir
   for (;;) {
     const candidate = path.join(cur, ".opencode", "opencode.jsonc")
     if (fs.existsSync(candidate)) return candidate
@@ -210,6 +210,7 @@ interface UnpackOptions {
   zipPath: string
   target?: string
   yes?: boolean
+  skipDeps?: boolean
 }
 
 /**
@@ -233,21 +234,13 @@ export async function cmdUnpack(opts: UnpackOptions): Promise<void> {
     return
   }
 
-  // 解析 zip
   const s = spinner()
   s.start("读取 zip 包...")
-  const buf = fs.readFileSync(zipPath)
-  const zip = await JSZip.loadAsync(buf)
-
+  const zip = await JSZip.loadAsync(fs.readFileSync(zipPath))
   const manifestFile = zip.file("manifest.json")
-  if (!manifestFile) {
-    s.stop("zip 包中缺少 manifest.json", 1)
-    process.exitCode = 1
-    return
-  }
-
   let manifest: AgentManifest
   try {
+    if (!manifestFile) throw new Error("zip 包中缺少 manifest.json")
     manifest = parseManifest(await manifestFile.async("string"))
   } catch (e) {
     s.stop("manifest.json 验证失败", 1)
@@ -294,7 +287,12 @@ export async function cmdUnpack(opts: UnpackOptions): Promise<void> {
       log.warn(`manifest 中声明的文件不在 zip 内: ${agentPath}`)
       continue
     }
-    const dest = path.join(opencodeDir, agentPath)
+    const dest = path.resolve(opencodeDir, agentPath)
+    // 防止 ZIP Slip：拒绝路径遍历到目标目录之外
+    if (!dest.startsWith(path.resolve(opencodeDir) + path.sep) && dest !== path.resolve(opencodeDir)) {
+      log.warn(`跳过非法路径（路径遍历）: ${agentPath}`)
+      continue
+    }
     fs.mkdirSync(path.dirname(dest), { recursive: true })
     fs.writeFileSync(dest, await file.async("string"), "utf8")
     copied++
@@ -302,6 +300,14 @@ export async function cmdUnpack(opts: UnpackOptions): Promise<void> {
   s1.stop(`已复制 ${copied} 个 agent 文件到 ${opencodeDir}/agent/`)
 
   const deps = manifest.dependencies
+
+  if (opts.skipDeps) {
+    log.warn("已跳过 dependencies 安装和配置")
+    log.success(`${manifest.name} 导入完成！`)
+    log.info(`重启 OpenCode 后即可使用 @${path.basename(manifest.agents[0], ".md")} 调用此 agent`)
+    outro("Unpack 完成")
+    return
+  }
 
   // 2. 安装 Skills
   if (deps.skills && deps.skills.length > 0) {
@@ -323,7 +329,7 @@ export async function cmdUnpack(opts: UnpackOptions): Promise<void> {
   if (deps.mcp && deps.mcp.length > 0) {
     const s3 = spinner()
     s3.start("合并 MCP 配置...")
-    const configPath = resolveOpencodeConfig()
+    const configPath = opts.target ? path.join(opencodeDir, "opencode.jsonc") : resolveOpencodeConfig()
     mergeJsonc(configPath, (obj) => {
       const mcp = (obj.mcp ?? {}) as Record<string, unknown>
       for (const m of deps.mcp!) {
@@ -445,4 +451,11 @@ export async function cmdUnpack(opts: UnpackOptions): Promise<void> {
   log.info(`重启 OpenCode 后即可使用 @${path.basename(manifest.agents[0], ".md")} 调用此 agent`)
 
   outro("Unpack 完成")
+}
+
+export async function readManifestFromZip(zipPath: string): Promise<AgentManifest> {
+  const zip = await JSZip.loadAsync(fs.readFileSync(path.resolve(zipPath)))
+  const manifestFile = zip.file("manifest.json")
+  if (!manifestFile) throw new Error("zip 包中缺少 manifest.json")
+  return parseManifest(await manifestFile.async("string"))
 }

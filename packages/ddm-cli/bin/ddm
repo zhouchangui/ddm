@@ -1,3 +1,4 @@
+#!/usr/bin/env node
 import { createRequire } from "node:module";
 var __create = Object.create;
 var __getProtoOf = Object.getPrototypeOf;
@@ -14056,6 +14057,7 @@ var init_schema = __esm(() => {
 // src/cmd/pack.ts
 var exports_pack = {};
 __export(exports_pack, {
+  readManifestFromZip: () => readManifestFromZip,
   cmdUnpack: () => cmdUnpack,
   cmdPack: () => cmdPack
 });
@@ -14083,8 +14085,8 @@ function walkDir(dir, ext) {
   }
   return results;
 }
-function resolveOpencodeConfig() {
-  let cur = process.cwd();
+function resolveOpencodeConfig(baseDir = process.cwd()) {
+  let cur = baseDir;
   for (;; ) {
     const candidate = path.join(cur, ".opencode", "opencode.jsonc");
     if (fs.existsSync(candidate))
@@ -14219,16 +14221,12 @@ async function cmdUnpack(opts) {
   }
   const s = J2();
   s.start("读取 zip 包...");
-  const buf = fs.readFileSync(zipPath);
-  const zip = await import_jszip.default.loadAsync(buf);
+  const zip = await import_jszip.default.loadAsync(fs.readFileSync(zipPath));
   const manifestFile = zip.file("manifest.json");
-  if (!manifestFile) {
-    s.stop("zip 包中缺少 manifest.json", 1);
-    process.exitCode = 1;
-    return;
-  }
   let manifest;
   try {
+    if (!manifestFile)
+      throw new Error("zip 包中缺少 manifest.json");
     manifest = parseManifest(await manifestFile.async("string"));
   } catch (e2) {
     s.stop("manifest.json 验证失败", 1);
@@ -14270,13 +14268,24 @@ async function cmdUnpack(opts) {
       T2.warn(`manifest 中声明的文件不在 zip 内: ${agentPath}`);
       continue;
     }
-    const dest = path.join(opencodeDir, agentPath);
+    const dest = path.resolve(opencodeDir, agentPath);
+    if (!dest.startsWith(path.resolve(opencodeDir) + path.sep) && dest !== path.resolve(opencodeDir)) {
+      T2.warn(`跳过非法路径（路径遍历）: ${agentPath}`);
+      continue;
+    }
     fs.mkdirSync(path.dirname(dest), { recursive: true });
     fs.writeFileSync(dest, await file.async("string"), "utf8");
     copied++;
   }
   s1.stop(`已复制 ${copied} 个 agent 文件到 ${opencodeDir}/agent/`);
   const deps = manifest.dependencies;
+  if (opts.skipDeps) {
+    T2.warn("已跳过 dependencies 安装和配置");
+    T2.success(`${manifest.name} 导入完成！`);
+    T2.info(`重启 OpenCode 后即可使用 @${path.basename(manifest.agents[0], ".md")} 调用此 agent`);
+    Fe("Unpack 完成");
+    return;
+  }
   if (deps.skills && deps.skills.length > 0) {
     for (const skill of deps.skills) {
       const s2 = J2();
@@ -14295,7 +14304,7 @@ async function cmdUnpack(opts) {
   if (deps.mcp && deps.mcp.length > 0) {
     const s3 = J2();
     s3.start("合并 MCP 配置...");
-    const configPath = resolveOpencodeConfig();
+    const configPath = opts.target ? path.join(opencodeDir, "opencode.jsonc") : resolveOpencodeConfig();
     mergeJsonc(configPath, (obj) => {
       const mcp = obj.mcp ?? {};
       for (const m2 of deps.mcp) {
@@ -14407,6 +14416,13 @@ async function cmdUnpack(opts) {
   T2.success(`${manifest.name} 导入完成！`);
   T2.info(`重启 OpenCode 后即可使用 @${path.basename(manifest.agents[0], ".md")} 调用此 agent`);
   Fe("Unpack 完成");
+}
+async function readManifestFromZip(zipPath) {
+  const zip = await import_jszip.default.loadAsync(fs.readFileSync(path.resolve(zipPath)));
+  const manifestFile = zip.file("manifest.json");
+  if (!manifestFile)
+    throw new Error("zip 包中缺少 manifest.json");
+  return parseManifest(await manifestFile.async("string"));
 }
 var import_jszip, import_gray_matter;
 var init_pack = __esm(() => {
@@ -20319,8 +20335,8 @@ function readSession() {
   }
 }
 function writeSession(session) {
-  fs6.mkdirSync(path3.dirname(DDM_AUTH_FILE), { recursive: true });
-  fs6.writeFileSync(DDM_AUTH_FILE, JSON.stringify(session, null, 2), "utf8");
+  fs6.mkdirSync(path3.dirname(DDM_AUTH_FILE), { recursive: true, mode: 448 });
+  fs6.writeFileSync(DDM_AUTH_FILE, JSON.stringify(session, null, 2), { encoding: "utf8", mode: 384 });
 }
 function resolveGlobalOpencodeConfig() {
   const xdgConfig = process.env.XDG_CONFIG_HOME ?? path3.join(os3.homedir(), ".config");
@@ -20341,32 +20357,6 @@ function mergeJson(filePath, patch) {
   patch(obj);
   fs6.mkdirSync(path3.dirname(filePath), { recursive: true });
   fs6.writeFileSync(filePath, JSON.stringify(obj, null, 2), "utf8");
-}
-function upsertShellRc(vars) {
-  const shell = process.env.SHELL ?? "";
-  const rcFile = shell.includes("zsh") ? path3.join(os3.homedir(), ".zshrc") : path3.join(os3.homedir(), ".bashrc");
-  let existing = "";
-  try {
-    existing = fs6.readFileSync(rcFile, "utf8");
-  } catch {}
-  const BLOCK_START = "# >>> DDM CLI env >>>";
-  const BLOCK_END = "# <<< DDM CLI env <<<";
-  const exportLines = Object.entries(vars).map(([k3, v3]) => `export ${k3}="${v3}"`).join(`
-`);
-  const newBlock = `${BLOCK_START}
-${exportLines}
-${BLOCK_END}`;
-  let next;
-  if (existing.includes(BLOCK_START)) {
-    next = existing.replace(new RegExp(`${BLOCK_START}[\\s\\S]*?${BLOCK_END}`), newBlock);
-  } else {
-    next = existing.trimEnd() + `
-
-` + newBlock + `
-`;
-  }
-  fs6.writeFileSync(rcFile, next, "utf8");
-  T2.info(`环境变量已写入 ${rcFile}（重启终端后生效）`);
 }
 async function supabaseFetch(path4, accessToken, init = {}) {
   const url = `${SUPABASE_FUNCTIONS_URL}${path4}`;
@@ -20591,6 +20581,9 @@ async function cmdLogin() {
       };
     }
     obj.provider = providers;
+    if (llmEndpoint) {
+      obj.model = "ddm/ddm-auto";
+    }
     const mcp = obj.mcp ?? {};
     if (mcp["ddm-image"] && typeof mcp["ddm-image"] === "object") {
       const mcpEntry = mcp["ddm-image"];
@@ -20603,18 +20596,12 @@ async function cmdLogin() {
     obj.mcp = mcp;
   });
   s4.stop(`已更新 ${opencodeConfig}`);
-  const envVars = {
-    DDM_TOKEN: serviceToken
-  };
-  if (llmEndpoint) {
-    envVars.DDM_SERVICE_LLM_BASE_URL = llmEndpoint.baseUrl;
-    envVars.DDM_SERVICE_LLM_TOKEN = serviceToken;
-  }
-  if (imageEndpoint) {
-    envVars.DDM_IMAGE_API_URL = `${imageEndpoint.baseUrl}/images`;
-    envVars.DDM_IMAGE_API_KEY = serviceToken;
-  }
-  upsertShellRc(envVars);
+  writeSession({
+    ...session,
+    serviceToken,
+    llmBaseUrl: llmEndpoint?.baseUrl ?? null,
+    imageApiUrl: imageEndpoint ? `${imageEndpoint.baseUrl}/images` : null
+  });
   T2.info("");
   T2.success("登录完成！");
   T2.info(`用户    : ${session.user.email}`);
@@ -20624,7 +20611,6 @@ async function cmdLogin() {
     T2.info(`图像    : ${imageEndpoint.baseUrl}/images`);
   T2.info(`配置    : ${opencodeConfig}`);
   T2.info(`凭证    : ${DDM_AUTH_FILE}`);
-  T2.warn("请重启终端（或运行 source ~/.zshrc）使环境变量在当前 shell 生效");
   Fe("Done");
 }
 async function cmdSetup(opts = {}) {
@@ -20738,42 +20724,74 @@ Windows Registry Editor Version 5.00
     }
   }
 }
-async function cmdImport(input) {
+async function resolveImportZip(input, quiet = false) {
+  if (!input.startsWith("ddm://"))
+    return { zipPath: input, cleanup: () => {} };
+  let pkgUrl;
+  try {
+    const parsed = new URL(input);
+    pkgUrl = parsed.searchParams.get("pkg") ?? parsed.searchParams.get("url") ?? "";
+    if (!pkgUrl)
+      throw new Error("缺少 pkg/url 参数");
+  } catch (e2) {
+    throw new Error(`无效的 ddm:// URL: ${String(e2)}`);
+  }
+  const parsedUrl = new URL(pkgUrl);
+  if (parsedUrl.protocol !== "https:")
+    throw new Error(`只允许 https:// 协议，拒绝: ${parsedUrl.protocol}`);
+  const s = quiet ? null : J2();
+  s?.start(`下载 agent 包: ${pkgUrl}`);
+  const resp = await fetch(pkgUrl);
+  if (!resp.ok) {
+    s?.stop(`下载失败: HTTP ${resp.status}`, 1);
+    throw new Error(`下载失败: HTTP ${resp.status}`);
+  }
+  const tmpFile = path3.join(os3.tmpdir(), `ddm-import-${Date.now()}.zip`);
+  fs6.writeFileSync(tmpFile, Buffer.from(await resp.arrayBuffer()));
+  s?.stop(`已下载到临时文件: ${tmpFile}`);
+  return {
+    zipPath: tmpFile,
+    cleanup: () => {
+      try {
+        fs6.unlinkSync(tmpFile);
+      } catch {}
+    }
+  };
+}
+async function cmdPreview(input) {
+  try {
+    const { readManifestFromZip: readManifestFromZip2 } = await Promise.resolve().then(() => (init_pack(), exports_pack));
+    const resolved = await resolveImportZip(input, true);
+    try {
+      process.stdout.write(`${JSON.stringify(await readManifestFromZip2(resolved.zipPath), null, 2)}
+`);
+    } finally {
+      resolved.cleanup();
+    }
+  } catch (e2) {
+    T2.error(String(e2));
+    process.exitCode = 1;
+  }
+}
+async function cmdImport(input, opts = {}) {
   const { cmdUnpack: cmdUnpack2 } = await Promise.resolve().then(() => (init_pack(), exports_pack));
   if (input.startsWith("ddm://")) {
     Ge("DDM Import");
-    let pkgUrl;
     try {
-      const parsed = new URL(input);
-      pkgUrl = parsed.searchParams.get("pkg") ?? "";
-      if (!pkgUrl)
-        throw new Error("缺少 pkg 参数");
+      const resolved = await resolveImportZip(input);
+      try {
+        Fe("下载完成，开始导入...");
+        await cmdUnpack2({ zipPath: resolved.zipPath, target: opts.target, yes: opts.yes, skipDeps: opts.skipDeps });
+      } finally {
+        resolved.cleanup();
+      }
     } catch (e2) {
-      T2.error(`无效的 ddm:// URL: ${input}`);
       T2.error(String(e2));
       process.exitCode = 1;
-      return;
     }
-    const s = J2();
-    s.start(`下载 agent 包: ${pkgUrl}`);
-    const resp = await fetch(pkgUrl);
-    if (!resp.ok) {
-      s.stop(`下载失败: HTTP ${resp.status}`, 1);
-      process.exitCode = 1;
-      return;
-    }
-    const buf = Buffer.from(await resp.arrayBuffer());
-    const tmpFile = path3.join(os3.tmpdir(), `ddm-import-${Date.now()}.zip`);
-    fs6.writeFileSync(tmpFile, buf);
-    s.stop(`已下载到临时文件: ${tmpFile}`);
-    Fe("下载完成，开始导入...");
-    await cmdUnpack2({ zipPath: tmpFile });
-    try {
-      fs6.unlinkSync(tmpFile);
-    } catch {}
-  } else {
-    await cmdUnpack2({ zipPath: input });
+    return;
   }
+  await cmdUnpack2({ zipPath: input, target: opts.target, yes: opts.yes, skipDeps: opts.skipDeps });
 }
 
 // src/index.ts
@@ -20826,8 +20844,27 @@ yargs_default(hideBin(process.argv)).scriptName("ddm").usage("$0 <command> [opti
   });
 }).command("import <input>", "从 ddm:// 协议 URL 或本地 zip 文件导入 agent", (y) => y.positional("input", {
   type: "string",
-  describe: "ddm://import?pkg=<url> 或 /path/to/file.zip",
+  describe: "ddm://import?pkg=<url>、ddm://import-agent?url=<url> 或 /path/to/file.zip",
+  demandOption: true
+}).option("yes", {
+  alias: "y",
+  type: "boolean",
+  default: false,
+  describe: "跳过确认提示，直接导入"
+}).option("target", {
+  alias: "t",
+  type: "string",
+  describe: "目标目录（默认为全局 OpenCode 配置目录，指定后会在该目录创建 .opencode/）"
+}).option("skip-deps", {
+  type: "boolean",
+  default: false,
+  describe: "只恢复 agent 文件，跳过 dependencies 安装和配置（用于离线验证）"
+}), async (args) => {
+  await cmdImport(args.input, { target: args.target, yes: args.yes, skipDeps: args["skip-deps"] });
+}).command("preview <input>", "读取 ddm:// 协议 URL 或本地 zip 文件中的 manifest.json", (y) => y.positional("input", {
+  type: "string",
+  describe: "ddm://import?pkg=<url>、ddm://import-agent?url=<url> 或 /path/to/file.zip",
   demandOption: true
 }), async (args) => {
-  await cmdImport(args.input);
+  await cmdPreview(args.input);
 }).demandCommand(1, "请指定一个命令").help().alias("h", "help").version().alias("v", "version").strict().parse();

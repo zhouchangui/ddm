@@ -77,8 +77,8 @@ function readSession(): StoredSession | null {
 }
 
 function writeSession(session: StoredSession): void {
-  fs.mkdirSync(path.dirname(DDM_AUTH_FILE), { recursive: true })
-  fs.writeFileSync(DDM_AUTH_FILE, JSON.stringify(session, null, 2), "utf8")
+  fs.mkdirSync(path.dirname(DDM_AUTH_FILE), { recursive: true, mode: 0o700 })
+  fs.writeFileSync(DDM_AUTH_FILE, JSON.stringify(session, null, 2), { encoding: "utf8", mode: 0o600 })
 }
 
 // ─── OpenCode 配置工具 ─────────────────────────────────────────
@@ -663,49 +663,79 @@ Windows Registry Editor Version 5.00
 // ─── IMPORT ───────────────────────────────────────────────────
 
 /**
- * ddm import <ddm://import?pkg=<url>> 或 <path/to/file.zip>
+ * ddm import <ddm://import?pkg=<url>>、<ddm://import-agent?url=<url>> 或 <path/to/file.zip>
  */
-export async function cmdImport(input: string): Promise<void> {
+async function resolveImportZip(input: string, quiet = false): Promise<{ zipPath: string; cleanup: () => void }> {
+  if (!input.startsWith("ddm://")) return { zipPath: input, cleanup: () => {} }
+
+  let pkgUrl: string
+  try {
+    const parsed = new URL(input)
+    pkgUrl = parsed.searchParams.get("pkg") ?? parsed.searchParams.get("url") ?? ""
+    if (!pkgUrl) throw new Error("缺少 pkg/url 参数")
+  } catch (e) {
+    throw new Error(`无效的 ddm:// URL: ${String(e)}`)
+  }
+
+  // 只允许 https:// 防止 SSRF（file://、http://、内网地址等）
+  const parsedUrl = new URL(pkgUrl)
+  if (parsedUrl.protocol !== "https:") throw new Error(`只允许 https:// 协议，拒绝: ${parsedUrl.protocol}`)
+
+  const s = quiet ? null : spinner()
+  s?.start(`下载 agent 包: ${pkgUrl}`)
+  const resp = await fetch(pkgUrl)
+  if (!resp.ok) {
+    s?.stop(`下载失败: HTTP ${resp.status}`, 1)
+    throw new Error(`下载失败: HTTP ${resp.status}`)
+  }
+
+  const tmpFile = path.join(os.tmpdir(), `ddm-import-${Date.now()}.zip`)
+  fs.writeFileSync(tmpFile, Buffer.from(await resp.arrayBuffer()))
+  s?.stop(`已下载到临时文件: ${tmpFile}`)
+  return {
+    zipPath: tmpFile,
+    cleanup: () => {
+      try {
+        fs.unlinkSync(tmpFile)
+      } catch {}
+    },
+  }
+}
+
+export async function cmdPreview(input: string): Promise<void> {
+  try {
+    const { readManifestFromZip } = await import("./pack.js")
+    const resolved = await resolveImportZip(input, true)
+    try {
+      process.stdout.write(`${JSON.stringify(await readManifestFromZip(resolved.zipPath), null, 2)}\n`)
+    } finally {
+      resolved.cleanup()
+    }
+  } catch (e) {
+    log.error(String(e))
+    process.exitCode = 1
+  }
+}
+
+export async function cmdImport(input: string, opts: { target?: string; yes?: boolean; skipDeps?: boolean } = {}): Promise<void> {
   const { cmdUnpack } = await import("./pack.js")
 
   if (input.startsWith("ddm://")) {
     intro("DDM Import")
-
-    let pkgUrl: string
     try {
-      const parsed = new URL(input)
-      pkgUrl = parsed.searchParams.get("pkg") ?? ""
-      if (!pkgUrl) throw new Error("缺少 pkg 参数")
+      const resolved = await resolveImportZip(input)
+      try {
+        outro("下载完成，开始导入...")
+        await cmdUnpack({ zipPath: resolved.zipPath, target: opts.target, yes: opts.yes, skipDeps: opts.skipDeps })
+      } finally {
+        resolved.cleanup()
+      }
     } catch (e) {
-      log.error(`无效的 ddm:// URL: ${input}`)
       log.error(String(e))
       process.exitCode = 1
-      return
     }
-
-    const s = spinner()
-    s.start(`下载 agent 包: ${pkgUrl}`)
-
-    const resp = await fetch(pkgUrl)
-    if (!resp.ok) {
-      s.stop(`下载失败: HTTP ${resp.status}`, 1)
-      process.exitCode = 1
-      return
-    }
-
-    const buf = Buffer.from(await resp.arrayBuffer())
-    const tmpFile = path.join(os.tmpdir(), `ddm-import-${Date.now()}.zip`)
-    fs.writeFileSync(tmpFile, buf)
-    s.stop(`已下载到临时文件: ${tmpFile}`)
-
-    outro("下载完成，开始导入...")
-
-    await cmdUnpack({ zipPath: tmpFile })
-
-    try {
-      fs.unlinkSync(tmpFile)
-    } catch {}
-  } else {
-    await cmdUnpack({ zipPath: input })
+    return
   }
+
+  await cmdUnpack({ zipPath: input, target: opts.target, yes: opts.yes, skipDeps: opts.skipDeps })
 }
