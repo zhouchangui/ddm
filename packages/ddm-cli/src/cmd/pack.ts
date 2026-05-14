@@ -53,6 +53,67 @@ function resolveOpencodeConfig(baseDir = process.cwd()): string {
   return path.join(dir, "opencode.jsonc")
 }
 
+function skillRoots(target?: string): string[] {
+  const home = os.homedir()
+  const xdgConfig = process.env.XDG_CONFIG_HOME ?? path.join(home, ".config")
+  const opencodeDir = target ? path.join(path.resolve(target), ".opencode") : path.join(xdgConfig, "opencode")
+  const projectDirs = [process.cwd(), target ? path.resolve(target) : ""]
+    .filter((dir): dir is string => dir.length > 0)
+    .flatMap((dir) => {
+      const dirs: string[] = []
+      for (let current = path.resolve(dir); ; current = path.dirname(current)) {
+        dirs.push(current)
+        if (path.dirname(current) === current) return dirs
+      }
+    })
+
+  return Array.from(
+    new Set([
+      path.join(home, ".agents", "skills"),
+      path.join(home, ".claude", "skills"),
+      path.join(opencodeDir, "skill"),
+      path.join(opencodeDir, "skills"),
+      ...projectDirs.flatMap((dir) => [
+        path.join(dir, ".agents", "skills"),
+        path.join(dir, ".claude", "skills"),
+        path.join(dir, ".opencode", "skill"),
+        path.join(dir, ".opencode", "skills"),
+      ]),
+    ]),
+  )
+}
+
+function skillFiles(root: string): string[] {
+  if (!fs.existsSync(root)) return []
+  return fs.readdirSync(root).flatMap((entry) => {
+    const full = path.join(root, entry)
+    let stat: fs.Stats
+    try {
+      stat = fs.statSync(full)
+    } catch {
+      return []
+    }
+    if (!stat.isDirectory()) return entry === "SKILL.md" ? [full] : []
+    return [path.join(full, "SKILL.md"), ...skillFiles(full)].filter((file) => fs.existsSync(file))
+  })
+}
+
+function installedSkillLocation(name: string, target?: string): string | undefined {
+  return skillRoots(target)
+    .flatMap((root) => {
+      const direct = path.join(root, name, "SKILL.md")
+      return fs.existsSync(direct) ? [direct, ...skillFiles(root)] : skillFiles(root)
+    })
+    .find((file) => {
+      try {
+        const parsed = matter(fs.readFileSync(file, "utf8"))
+        return parsed.data.name === name
+      } catch {
+        return false
+      }
+    })
+}
+
 function mergeJsonc(filePath: string, patch: (obj: Record<string, unknown>) => void): void {
   let raw = readFileSafe(filePath) ?? "{}"
   // 去掉 JSONC 注释（简单处理：单行 //）
@@ -211,7 +272,10 @@ interface UnpackOptions {
   target?: string
   yes?: boolean
   skipDeps?: boolean
+  env?: Record<string, string>
 }
+
+const cleanEnvValue = (value: string) => value.replaceAll("\n", "").replaceAll("\r", "")
 
 /**
  * ddm unpack <file.zip>
@@ -257,11 +321,22 @@ export async function cmdUnpack(opts: UnpackOptions): Promise<void> {
     log.info(`📝 简介  : ${manifest.summary}`)
 
     const deps = manifest.dependencies
-    if (deps.skills?.length) log.info(`🔧 将安装 Skills: ${deps.skills.map((s) => s.name).join(", ")}`)
+    if (deps.skills?.length) {
+      const skills = deps.skills.map((skill) => ({ skill, existing: installedSkillLocation(skill.name, opts.target) }))
+      const toInstall = skills.filter((item) => !item.existing).map((item) => item.skill.name)
+      const installed = skills.filter((item) => item.existing).map((item) => item.skill.name)
+      if (toInstall.length) log.info(`🔧 将安装 Skills: ${toInstall.join(", ")}`)
+      if (installed.length) log.info(`✅ 已存在并跳过 Skills: ${installed.join(", ")}`)
+    }
     if (deps.mcp?.length) log.info(`🔌 将配置 MCP: ${deps.mcp.map((m) => m.name).join(", ")}`)
     if (deps.docker?.length) log.info(`🐳 将启动 Docker: ${deps.docker.map((d) => d.service).join(", ")}`)
     if (deps.envVars?.filter((e) => e.required).length) {
-      log.info(`🔑 需要填写环境变量: ${deps.envVars.filter((e) => e.required).map((e) => e.key).join(", ")}`)
+      log.info(
+        `🔑 需要填写环境变量: ${deps.envVars
+          .filter((e) => e.required)
+          .map((e) => e.key)
+          .join(", ")}`,
+      )
     }
 
     const ok = await confirm({ message: "确认导入这个 agent 吗？" })
@@ -312,6 +387,12 @@ export async function cmdUnpack(opts: UnpackOptions): Promise<void> {
   // 2. 安装 Skills
   if (deps.skills && deps.skills.length > 0) {
     for (const skill of deps.skills) {
+      const existing = installedSkillLocation(skill.name, opts.target)
+      if (existing) {
+        log.info(`skill 已存在，跳过安装: ${skill.name} (${existing})`)
+        continue
+      }
+
       const s2 = spinner()
       s2.start(`安装 skill: ${skill.name}...`)
       const r = await runCommand(skill.installCommand)
@@ -407,6 +488,11 @@ export async function cmdUnpack(opts: UnpackOptions): Promise<void> {
 
     const envLines: string[] = []
     for (const ev of deps.envVars) {
+      const supplied = opts.env?.[ev.key]
+      if (supplied) {
+        envLines.push(`${ev.key}=${cleanEnvValue(supplied)}`)
+        continue
+      }
       if (opts.yes) {
         log.warn(`  ${ev.required ? "[必须]" : "[可选]"} ${ev.key}`)
         log.info(`         ${ev.description}`)

@@ -8,15 +8,11 @@ import { intro, log, outro, spinner } from "@clack/prompts"
 // ─── 平台常量（从 dingding-platform .env.prod 同步） ───────────
 // 如需切换环境，可通过环境变量覆盖
 
-const PLATFORM_WEB_BASE_URL =
-  process.env.PLATFORM_WEB_BASE_URL ?? "https://www.bothub.run"
+const PLATFORM_WEB_BASE_URL = process.env.PLATFORM_WEB_BASE_URL ?? "https://www.bothub.run"
 
-const SUPABASE_URL =
-  process.env.SUPABASE_URL ?? "https://kemfhphqsaxooafdmivq.supabase.co"
+const SUPABASE_URL = process.env.SUPABASE_URL ?? "https://kemfhphqsaxooafdmivq.supabase.co"
 
-const SUPABASE_ANON_KEY =
-  process.env.SUPABASE_ANON_KEY ??
-  "sb_publishable_bMXQDnIXXnLZ_qqqKup3Ug_SwHbbu1F"
+const SUPABASE_ANON_KEY = process.env.SUPABASE_ANON_KEY ?? "sb_publishable_bMXQDnIXXnLZ_qqqKup3Ug_SwHbbu1F"
 
 const SUPABASE_FUNCTIONS_URL = `${SUPABASE_URL}/functions/v1`
 
@@ -94,10 +90,7 @@ function resolveGlobalEnvFile(): string {
   return path.join(xdgConfig, "opencode", ".env")
 }
 
-function mergeJson(
-  filePath: string,
-  patch: (obj: Record<string, unknown>) => void,
-): void {
+function mergeJson(filePath: string, patch: (obj: Record<string, unknown>) => void): void {
   let raw = "{}"
   try {
     raw = fs.readFileSync(filePath, "utf8")
@@ -119,11 +112,7 @@ function mergeJson(
 
 // ─── 平台 API 工具 ────────────────────────────────────────────
 
-async function supabaseFetch<T>(
-  path: string,
-  accessToken: string,
-  init: RequestInit = {},
-): Promise<T> {
+async function supabaseFetch<T>(path: string, accessToken: string, init: RequestInit = {}): Promise<T> {
   const url = `${SUPABASE_FUNCTIONS_URL}${path}`
   const resp = await fetch(url, {
     ...init,
@@ -327,15 +316,12 @@ export async function cmdLogin(): Promise<void> {
   s3.start("获取平台服务凭证...")
 
   // 6a. 查 REST 拿 instance_id
-  const instancesResp = await fetch(
-    `${SUPABASE_URL}/rest/v1/openclaw_service_instances?select=id,name&limit=5`,
-    {
-      headers: {
-        apikey: SUPABASE_ANON_KEY,
-        authorization: `Bearer ${session.accessToken}`,
-      },
+  const instancesResp = await fetch(`${SUPABASE_URL}/rest/v1/openclaw_service_instances?select=id,name&limit=5`, {
+    headers: {
+      apikey: SUPABASE_ANON_KEY,
+      authorization: `Bearer ${session.accessToken}`,
     },
-  )
+  })
   if (!instancesResp.ok) {
     s3.stop("查询服务实例失败", 1)
     log.error(`HTTP ${instancesResp.status}: ${await instancesResp.text()}`)
@@ -418,12 +404,12 @@ export async function cmdLogin(): Promise<void> {
     const providers = (obj.provider ?? {}) as Record<string, unknown>
     if (llmEndpoint) {
       // OpenCode custom provider 格式：
-      // - npm: SDK 包名（openai-compatible 兼容接口）
+      // - npm: SDK 包名（OpenAI provider 默认走 Responses API）
       // - options.apiKey / options.baseURL：凭证和地址
       // - models：至少要有一个条目，否则 autoload=false，不显示
       providers["ddm"] = {
         name: "DDM",
-        npm: "@ai-sdk/openai-compatible",
+        npm: "@ai-sdk/openai",
         options: {
           apiKey: serviceToken,
           baseURL: llmEndpoint.baseUrl,
@@ -449,7 +435,7 @@ export async function cmdLogin(): Promise<void> {
     if (mcp["ddm-image"] && typeof mcp["ddm-image"] === "object") {
       const mcpEntry = mcp["ddm-image"] as Record<string, unknown>
       mcpEntry.environment = {
-        ...(mcpEntry.environment as Record<string, string> ?? {}),
+        ...((mcpEntry.environment as Record<string, string>) ?? {}),
         DDM_TOKEN: serviceToken,
         ...(imageEndpoint ? { DDM_IMAGE_API_URL: `${imageEndpoint.baseUrl}/images` } : {}),
       }
@@ -554,19 +540,12 @@ async function findDdmBin(): Promise<string> {
 
 async function setupMacOS(ddmBin: string, silent: boolean): Promise<void> {
   const handlerScript = path.join(os.homedir(), ".local", "bin", "ddm-protocol-handler.sh")
-  const plistPath = path.join(
-    os.homedir(),
-    "Library",
-    "LaunchAgents",
-    "ai.ddm.protocol-handler.plist",
-  )
+  const plistPath = path.join(os.homedir(), "Library", "LaunchAgents", "ai.ddm.protocol-handler.plist")
 
   fs.mkdirSync(path.dirname(handlerScript), { recursive: true })
-  fs.writeFileSync(
-    handlerScript,
-    `#!/bin/bash\n# DDM protocol handler: ddm://<path>\n"${ddmBin}" import "$1"\n`,
-    { mode: 0o755 },
-  )
+  fs.writeFileSync(handlerScript, `#!/bin/bash\n# DDM protocol handler: ddm://<path>\n"${ddmBin}" import "$1"\n`, {
+    mode: 0o755,
+  })
 
   const plist = `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -597,13 +576,7 @@ async function setupMacOS(ddmBin: string, silent: boolean): Promise<void> {
 }
 
 async function setupLinux(ddmBin: string, silent: boolean): Promise<void> {
-  const desktopFile = path.join(
-    os.homedir(),
-    ".local",
-    "share",
-    "applications",
-    "ddm-protocol-handler.desktop",
-  )
+  const desktopFile = path.join(os.homedir(), ".local", "share", "applications", "ddm-protocol-handler.desktop")
 
   const content = `[Desktop Entry]
 Name=DDM Protocol Handler
@@ -665,16 +638,63 @@ Windows Registry Editor Version 5.00
 /**
  * ddm import <ddm://import?pkg=<url>>、<ddm://import-agent?url=<url>> 或 <path/to/file.zip>
  */
-async function resolveImportZip(input: string, quiet = false): Promise<{ zipPath: string; cleanup: () => void }> {
-  if (!input.startsWith("ddm://")) return { zipPath: input, cleanup: () => {} }
+async function resolveMarketAgentUrl(input: string): Promise<string | undefined> {
+  if (!URL.canParse(input)) return
 
-  let pkgUrl: string
-  try {
-    const parsed = new URL(input)
-    pkgUrl = parsed.searchParams.get("pkg") ?? parsed.searchParams.get("url") ?? ""
-    if (!pkgUrl) throw new Error("缺少 pkg/url 参数")
-  } catch (e) {
-    throw new Error(`无效的 ddm:// URL: ${String(e)}`)
+  const parsed = new URL(input)
+  const market = new URL(PLATFORM_WEB_BASE_URL)
+  if (parsed.protocol !== "https:" || parsed.hostname !== market.hostname) return
+
+  const [, kind, agentId] = parsed.pathname.split("/")
+  if (kind !== "agent" || !agentId) return
+
+  const query = new URL(`${SUPABASE_URL}/rest/v1/agents`)
+  query.searchParams.set("select", "id,latest_release_id,name")
+  query.searchParams.set("id", `eq.${agentId}`)
+  query.searchParams.set("status", "eq.published")
+  query.searchParams.set("show_in_market", "eq.true")
+
+  const resp = await fetch(query, {
+    headers: {
+      apikey: SUPABASE_ANON_KEY,
+      authorization: `Bearer ${SUPABASE_ANON_KEY}`,
+      accept: "application/json",
+    },
+  })
+  if (!resp.ok) throw new Error(`读取市场 agent 失败: HTTP ${resp.status}`)
+
+  const rows = (await resp.json()) as unknown
+  const agent = Array.isArray(rows) && rows[0] && typeof rows[0] === "object" ? rows[0] : undefined
+  const releaseId =
+    agent && "latest_release_id" in agent ? (agent as { latest_release_id?: unknown }).latest_release_id : undefined
+  if (typeof releaseId !== "string" || releaseId.length === 0) {
+    throw new Error("该市场 agent 暂无可导入版本")
+  }
+
+  const download = new URL(`${SUPABASE_FUNCTIONS_URL}/download-agent-release`)
+  download.searchParams.set("releaseId", releaseId)
+  download.searchParams.set("source", "market")
+  return download.toString()
+}
+
+async function resolveImportZip(input: string, quiet = false): Promise<{ zipPath: string; cleanup: () => void }> {
+  const pkgUrl = await (async () => {
+    if (input.startsWith("ddm://")) {
+      const parsed = new URL(input)
+      const value = parsed.searchParams.get("pkg") ?? parsed.searchParams.get("url") ?? ""
+      if (!value) throw new Error("无效的 ddm:// URL: 缺少 pkg/url 参数")
+      return value
+    }
+    if (URL.canParse(input)) {
+      const parsed = new URL(input)
+      if (parsed.protocol === "https:") return (await resolveMarketAgentUrl(input)) ?? input
+      throw new Error(`只允许 https:// 协议，拒绝: ${parsed.protocol}`)
+    }
+    return
+  })()
+
+  if (!pkgUrl) {
+    return { zipPath: input, cleanup: () => {} }
   }
 
   // 只允许 https:// 防止 SSRF（file://、http://、内网地址等）
@@ -717,16 +737,25 @@ export async function cmdPreview(input: string): Promise<void> {
   }
 }
 
-export async function cmdImport(input: string, opts: { target?: string; yes?: boolean; skipDeps?: boolean } = {}): Promise<void> {
+export async function cmdImport(
+  input: string,
+  opts: { target?: string; yes?: boolean; skipDeps?: boolean; env?: Record<string, string> } = {},
+): Promise<void> {
   const { cmdUnpack } = await import("./pack.js")
 
-  if (input.startsWith("ddm://")) {
+  if (input.startsWith("ddm://") || URL.canParse(input)) {
     intro("DDM Import")
     try {
       const resolved = await resolveImportZip(input)
       try {
         outro("下载完成，开始导入...")
-        await cmdUnpack({ zipPath: resolved.zipPath, target: opts.target, yes: opts.yes, skipDeps: opts.skipDeps })
+        await cmdUnpack({
+          zipPath: resolved.zipPath,
+          target: opts.target,
+          yes: opts.yes,
+          skipDeps: opts.skipDeps,
+          env: opts.env,
+        })
       } finally {
         resolved.cleanup()
       }
@@ -737,5 +766,5 @@ export async function cmdImport(input: string, opts: { target?: string; yes?: bo
     return
   }
 
-  await cmdUnpack({ zipPath: input, target: opts.target, yes: opts.yes, skipDeps: opts.skipDeps })
+  await cmdUnpack({ zipPath: input, target: opts.target, yes: opts.yes, skipDeps: opts.skipDeps, env: opts.env })
 }

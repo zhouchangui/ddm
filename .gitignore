@@ -31,3 +31,4 @@ logs/
 *.bun-build
 tsconfig.tsbuildinfo
 .gstack/
+.claude/scheduled_tasks.lock

@@ -15,6 +15,26 @@ export type TitlebarTheme = {
   mode: "light" | "dark"
 }
 
+export type DdmImportEnv = Record<string, string>
+
+export type DdmImportPreviewResult =
+  | {
+      success: true
+      downloadUrl: string
+      manifest: unknown
+      env?: DdmImportEnv
+      dependencyState?: DdmImportDependencyState
+    }
+  | { success: false; error?: string; downloadUrl?: string; manifest?: unknown }
+
+export type DdmImportProgress = {
+  message: string
+}
+
+export type DdmImportDependencyState = {
+  skills?: Record<string, { installed: boolean; location?: string }>
+}
+
 export type WindowConfig = {
   updaterEnabled: boolean
 }
@@ -76,4 +96,7 @@ export type ElectronAPI = {
   checkUpdate: () => Promise<{ updateAvailable: boolean; version?: string }>
   installUpdate: () => Promise<void>
   setBackgroundColor: (color: string) => Promise<void>
+  previewDdmImport: (pkgUrl: string) => Promise<DdmImportPreviewResult>
+  runDdmImport: (pkgUrl: string, opts?: { env?: DdmImportEnv }) => Promise<{ success: boolean; error?: string }>
+  onDdmImportProgress: (cb: (progress: DdmImportProgress) => void) => () => void
 }

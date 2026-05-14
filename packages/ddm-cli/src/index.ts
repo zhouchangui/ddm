@@ -3,6 +3,17 @@ import { hideBin } from "yargs/helpers"
 import { cmdPack, cmdUnpack } from "./cmd/pack.js"
 import { cmdLogin, cmdSetup, cmdImport, cmdPreview } from "./cmd/auth.js"
 
+function importEnvVars() {
+  if (!process.env.DDM_IMPORT_ENV_JSON) return undefined
+  const parsed = JSON.parse(process.env.DDM_IMPORT_ENV_JSON) as unknown
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return undefined
+  return Object.fromEntries(
+    Object.entries(parsed).filter(
+      (entry): entry is [string, string] => typeof entry[1] === "string" && entry[1].length > 0,
+    ),
+  )
+}
+
 yargs(hideBin(process.argv))
   .scriptName("ddm")
   .usage("$0 <command> [options]")
@@ -123,9 +134,13 @@ yargs(hideBin(process.argv))
           default: false,
           describe: "只恢复 agent 文件，跳过 dependencies 安装和配置（用于离线验证）",
         }),
-    async (args) => {
-      await cmdImport(args.input as string, { target: args.target, yes: args.yes, skipDeps: args["skip-deps"] })
-    },
+    async (args) =>
+      cmdImport(args.input as string, {
+        target: args.target,
+        yes: args.yes,
+        skipDeps: args["skip-deps"],
+        env: importEnvVars(),
+      }),
   )
 
   // ─── preview ───────────────────────────────────────────────

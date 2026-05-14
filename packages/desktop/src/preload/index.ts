@@ -66,6 +66,13 @@ const api: ElectronAPI = {
   checkUpdate: () => ipcRenderer.invoke("check-update"),
   installUpdate: () => ipcRenderer.invoke("install-update"),
   setBackgroundColor: (color: string) => ipcRenderer.invoke("set-background-color", color),
+  previewDdmImport: (pkgUrl: string) => ipcRenderer.invoke("preview-ddm-import", pkgUrl),
+  runDdmImport: (pkgUrl: string, opts) => ipcRenderer.invoke("run-ddm-import", pkgUrl, opts),
+  onDdmImportProgress: (cb) => {
+    const handler = (_: unknown, progress: { message: string }) => cb(progress)
+    ipcRenderer.on("ddm-import-progress", handler)
+    return () => ipcRenderer.removeListener("ddm-import-progress", handler)
+  },
 }
 
 contextBridge.exposeInMainWorld("api", api)

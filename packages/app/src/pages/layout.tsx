@@ -61,6 +61,7 @@ import { useTheme, type ColorScheme } from "@opencode-ai/ui/theme/context"
 import { useCommand, type CommandOption } from "@/context/command"
 import { ConstrainDragXAxis, getDraggableId } from "@/utils/solid-dnd"
 import { DebugBar } from "@/components/debug-bar"
+import { DialogDdmImportAgent } from "@/components/dialog-ddm-import-agent"
 import { Titlebar } from "@/components/titlebar"
 import { useServer } from "@/context/server"
 import { useLanguage, type Locale } from "@/context/language"
@@ -73,6 +74,7 @@ import {
   sortedRootSessions,
 } from "./layout/helpers"
 import {
+  collectImportAgentDeepLinks,
   collectNewSessionDeepLinks,
   collectOpenProjectDeepLinks,
   deepLinkEvent,
@@ -1391,6 +1393,10 @@ export default function Layout(props: ParentProps) {
       }
       const href = link.prompt ? `/${slug}/session?prompt=${encodeURIComponent(link.prompt)}` : `/${slug}/session`
       navigateWithSidebarReset(href)
+    }
+
+    for (const link of collectImportAgentDeepLinks(urls)) {
+      dialog.show(() => <DialogDdmImportAgent pkgUrl={link.pkgUrl} />)
     }
   }
 

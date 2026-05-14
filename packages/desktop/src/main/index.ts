@@ -77,7 +77,7 @@ function emitDeepLinks(urls: string[]) {
     void confirmAndRunDdmImport(input)
   }
   pendingDeepLinks.push(...urls)
-  if (mainWindow) sendDeepLinks(mainWindow, urls)
+  if (mainWindow && !mainWindow.isDestroyed()) sendDeepLinks(mainWindow, urls)
 }
 
 function formatDdmImportPreview(manifest: DdmImportManifest) {
@@ -420,6 +420,19 @@ const main = Effect.gen(function* () {
 
   mainWindow = createMainWindow()
   if (mainWindow) {
+    // 窗口关闭后清空引用，防止往已销毁 webContents 发消息
+    mainWindow.on("closed", () => {
+      mainWindow = null
+    })
+
+    // flush 冷启动期间积压的 deep links（renderer 可能在 did-finish-load 前已
+    // 通过 consumeInitialDeepLinks 取走，splice 保证不重复投递）
+    mainWindow.webContents.once("did-finish-load", () => {
+      if (mainWindow && !mainWindow.isDestroyed() && pendingDeepLinks.length > 0) {
+        sendDeepLinks(mainWindow, pendingDeepLinks.splice(0))
+      }
+    })
+
     createMenu({
       trigger: (id) => mainWindow && sendMenuCommand(mainWindow, id),
       checkForUpdates: () => {

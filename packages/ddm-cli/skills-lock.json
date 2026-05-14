@@ -1,0 +1,23 @@
+{
+  "version": 1,
+  "skills": {
+    "ddm-image-cards": {
+      "source": "zhouchangui/ddm-image-skills",
+      "sourceType": "github",
+      "skillPath": "ddm-image-cards/SKILL.md",
+      "computedHash": "11448ef1dfccd2e720c33c77b0a225b8e4da8872ecaf77d36bb43d219906e62b"
+    },
+    "ddm-infographic": {
+      "source": "zhouchangui/ddm-image-skills",
+      "sourceType": "github",
+      "skillPath": "ddm-infographic/SKILL.md",
+      "computedHash": "b9974f28c7b164d2b2a3b65caeb54fb12bcf6b8eca134ad5fc2d3feb71448e5e"
+    },
+    "ddm-slide-deck": {
+      "source": "zhouchangui/ddm-image-skills",
+      "sourceType": "github",
+      "skillPath": "ddm-slide-deck/SKILL.md",
+      "computedHash": "ce2b8e1734ca25df8a31c1998df061f88e7e251caf43561f780b3f9b98fd83b6"
+    }
+  }
+}

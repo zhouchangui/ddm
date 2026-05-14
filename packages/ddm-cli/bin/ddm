@@ -14100,6 +14100,60 @@ function resolveOpencodeConfig(baseDir = process.cwd()) {
   fs.mkdirSync(dir, { recursive: true });
   return path.join(dir, "opencode.jsonc");
 }
+function skillRoots(target) {
+  const home = os.homedir();
+  const xdgConfig = process.env.XDG_CONFIG_HOME ?? path.join(home, ".config");
+  const opencodeDir = target ? path.join(path.resolve(target), ".opencode") : path.join(xdgConfig, "opencode");
+  const projectDirs = [process.cwd(), target ? path.resolve(target) : ""].filter((dir) => dir.length > 0).flatMap((dir) => {
+    const dirs = [];
+    for (let current = path.resolve(dir);; current = path.dirname(current)) {
+      dirs.push(current);
+      if (path.dirname(current) === current)
+        return dirs;
+    }
+  });
+  return Array.from(new Set([
+    path.join(home, ".agents", "skills"),
+    path.join(home, ".claude", "skills"),
+    path.join(opencodeDir, "skill"),
+    path.join(opencodeDir, "skills"),
+    ...projectDirs.flatMap((dir) => [
+      path.join(dir, ".agents", "skills"),
+      path.join(dir, ".claude", "skills"),
+      path.join(dir, ".opencode", "skill"),
+      path.join(dir, ".opencode", "skills")
+    ])
+  ]));
+}
+function skillFiles(root) {
+  if (!fs.existsSync(root))
+    return [];
+  return fs.readdirSync(root).flatMap((entry) => {
+    const full = path.join(root, entry);
+    let stat;
+    try {
+      stat = fs.statSync(full);
+    } catch {
+      return [];
+    }
+    if (!stat.isDirectory())
+      return entry === "SKILL.md" ? [full] : [];
+    return [path.join(full, "SKILL.md"), ...skillFiles(full)].filter((file) => fs.existsSync(file));
+  });
+}
+function installedSkillLocation(name, target) {
+  return skillRoots(target).flatMap((root) => {
+    const direct = path.join(root, name, "SKILL.md");
+    return fs.existsSync(direct) ? [direct, ...skillFiles(root)] : skillFiles(root);
+  }).find((file) => {
+    try {
+      const parsed = import_gray_matter.default(fs.readFileSync(file, "utf8"));
+      return parsed.data.name === name;
+    } catch {
+      return false;
+    }
+  });
+}
 function mergeJsonc(filePath, patch) {
   let raw = readFileSafe(filePath) ?? "{}";
   raw = raw.replace(/\/\/[^\n]*/g, "");
@@ -14240,8 +14294,15 @@ async function cmdUnpack(opts) {
     T2.info(`\uD83D\uDCCC 版本  : ${manifest.version}`);
     T2.info(`\uD83D\uDCDD 简介  : ${manifest.summary}`);
     const deps2 = manifest.dependencies;
-    if (deps2.skills?.length)
-      T2.info(`\uD83D\uDD27 将安装 Skills: ${deps2.skills.map((s2) => s2.name).join(", ")}`);
+    if (deps2.skills?.length) {
+      const skills = deps2.skills.map((skill) => ({ skill, existing: installedSkillLocation(skill.name, opts.target) }));
+      const toInstall = skills.filter((item) => !item.existing).map((item) => item.skill.name);
+      const installed = skills.filter((item) => item.existing).map((item) => item.skill.name);
+      if (toInstall.length)
+        T2.info(`\uD83D\uDD27 将安装 Skills: ${toInstall.join(", ")}`);
+      if (installed.length)
+        T2.info(`✅ 已存在并跳过 Skills: ${installed.join(", ")}`);
+    }
     if (deps2.mcp?.length)
       T2.info(`\uD83D\uDD0C 将配置 MCP: ${deps2.mcp.map((m2) => m2.name).join(", ")}`);
     if (deps2.docker?.length)
@@ -14288,6 +14349,11 @@ async function cmdUnpack(opts) {
   }
   if (deps.skills && deps.skills.length > 0) {
     for (const skill of deps.skills) {
+      const existing = installedSkillLocation(skill.name, opts.target);
+      if (existing) {
+        T2.info(`skill 已存在，跳过安装: ${skill.name} (${existing})`);
+        continue;
+      }
       const s2 = J2();
       s2.start(`安装 skill: ${skill.name}...`);
       const r = await runCommand(skill.installCommand);
@@ -14372,6 +14438,11 @@ async function cmdUnpack(opts) {
     T2.info("以下环境变量需要配置：");
     const envLines = [];
     for (const ev of deps.envVars) {
+      const supplied = opts.env?.[ev.key];
+      if (supplied) {
+        envLines.push(`${ev.key}=${cleanEnvValue(supplied)}`);
+        continue;
+      }
       if (opts.yes) {
         T2.warn(`  ${ev.required ? "[必须]" : "[可选]"} ${ev.key}`);
         T2.info(`         ${ev.description}`);
@@ -14424,7 +14495,8 @@ async function readManifestFromZip(zipPath) {
     throw new Error("zip 包中缺少 manifest.json");
   return parseManifest(await manifestFile.async("string"));
 }
-var import_jszip, import_gray_matter;
+var import_jszip, import_gray_matter, cleanEnvValue = (value) => value.replaceAll(`
+`, "").replaceAll("\r", "");
 var init_pack = __esm(() => {
   init_dist2();
   init_schema();
@@ -20566,7 +20638,7 @@ async function cmdLogin() {
     if (llmEndpoint) {
       providers["ddm"] = {
         name: "DDM",
-        npm: "@ai-sdk/openai-compatible",
+        npm: "@ai-sdk/openai",
         options: {
           apiKey: serviceToken,
           baseURL: llmEndpoint.baseUrl
@@ -20645,7 +20717,9 @@ async function setupMacOS(ddmBin, silent) {
   fs6.writeFileSync(handlerScript, `#!/bin/bash
 # DDM protocol handler: ddm://<path>
 "${ddmBin}" import "$1"
-`, { mode: 493 });
+`, {
+    mode: 493
+  });
   const plist = `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -20724,17 +20798,60 @@ Windows Registry Editor Version 5.00
     }
   }
 }
+async function resolveMarketAgentUrl(input) {
+  if (!URL.canParse(input))
+    return;
+  const parsed = new URL(input);
+  const market = new URL(PLATFORM_WEB_BASE_URL);
+  if (parsed.protocol !== "https:" || parsed.hostname !== market.hostname)
+    return;
+  const [, kind, agentId] = parsed.pathname.split("/");
+  if (kind !== "agent" || !agentId)
+    return;
+  const query = new URL(`${SUPABASE_URL}/rest/v1/agents`);
+  query.searchParams.set("select", "id,latest_release_id,name");
+  query.searchParams.set("id", `eq.${agentId}`);
+  query.searchParams.set("status", "eq.published");
+  query.searchParams.set("show_in_market", "eq.true");
+  const resp = await fetch(query, {
+    headers: {
+      apikey: SUPABASE_ANON_KEY,
+      authorization: `Bearer ${SUPABASE_ANON_KEY}`,
+      accept: "application/json"
+    }
+  });
+  if (!resp.ok)
+    throw new Error(`读取市场 agent 失败: HTTP ${resp.status}`);
+  const rows = await resp.json();
+  const agent = Array.isArray(rows) && rows[0] && typeof rows[0] === "object" ? rows[0] : undefined;
+  const releaseId = agent && "latest_release_id" in agent ? agent.latest_release_id : undefined;
+  if (typeof releaseId !== "string" || releaseId.length === 0) {
+    throw new Error("该市场 agent 暂无可导入版本");
+  }
+  const download = new URL(`${SUPABASE_FUNCTIONS_URL}/download-agent-release`);
+  download.searchParams.set("releaseId", releaseId);
+  download.searchParams.set("source", "market");
+  return download.toString();
+}
 async function resolveImportZip(input, quiet = false) {
-  if (!input.startsWith("ddm://"))
+  const pkgUrl = await (async () => {
+    if (input.startsWith("ddm://")) {
+      const parsed = new URL(input);
+      const value = parsed.searchParams.get("pkg") ?? parsed.searchParams.get("url") ?? "";
+      if (!value)
+        throw new Error("无效的 ddm:// URL: 缺少 pkg/url 参数");
+      return value;
+    }
+    if (URL.canParse(input)) {
+      const parsed = new URL(input);
+      if (parsed.protocol === "https:")
+        return await resolveMarketAgentUrl(input) ?? input;
+      throw new Error(`只允许 https:// 协议，拒绝: ${parsed.protocol}`);
+    }
+    return;
+  })();
+  if (!pkgUrl) {
     return { zipPath: input, cleanup: () => {} };
-  let pkgUrl;
-  try {
-    const parsed = new URL(input);
-    pkgUrl = parsed.searchParams.get("pkg") ?? parsed.searchParams.get("url") ?? "";
-    if (!pkgUrl)
-      throw new Error("缺少 pkg/url 参数");
-  } catch (e2) {
-    throw new Error(`无效的 ddm:// URL: ${String(e2)}`);
   }
   const parsedUrl = new URL(pkgUrl);
   if (parsedUrl.protocol !== "https:")
@@ -20775,13 +20892,19 @@ async function cmdPreview(input) {
 }
 async function cmdImport(input, opts = {}) {
   const { cmdUnpack: cmdUnpack2 } = await Promise.resolve().then(() => (init_pack(), exports_pack));
-  if (input.startsWith("ddm://")) {
+  if (input.startsWith("ddm://") || URL.canParse(input)) {
     Ge("DDM Import");
     try {
       const resolved = await resolveImportZip(input);
       try {
         Fe("下载完成，开始导入...");
-        await cmdUnpack2({ zipPath: resolved.zipPath, target: opts.target, yes: opts.yes, skipDeps: opts.skipDeps });
+        await cmdUnpack2({
+          zipPath: resolved.zipPath,
+          target: opts.target,
+          yes: opts.yes,
+          skipDeps: opts.skipDeps,
+          env: opts.env
+        });
       } finally {
         resolved.cleanup();
       }
@@ -20791,10 +20914,18 @@ async function cmdImport(input, opts = {}) {
     }
     return;
   }
-  await cmdUnpack2({ zipPath: input, target: opts.target, yes: opts.yes, skipDeps: opts.skipDeps });
+  await cmdUnpack2({ zipPath: input, target: opts.target, yes: opts.yes, skipDeps: opts.skipDeps, env: opts.env });
 }
 
 // src/index.ts
+function importEnvVars() {
+  if (!process.env.DDM_IMPORT_ENV_JSON)
+    return;
+  const parsed = JSON.parse(process.env.DDM_IMPORT_ENV_JSON);
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed))
+    return;
+  return Object.fromEntries(Object.entries(parsed).filter((entry) => typeof entry[1] === "string" && entry[1].length > 0));
+}
 yargs_default(hideBin(process.argv)).scriptName("ddm").usage("$0 <command> [options]").command("pack <agent-dir>", "将 agent 目录打包为 zip 发布包", (y) => y.positional("agent-dir", {
   type: "string",
   describe: "包含 agent/*.md 和 manifest.json 的目录",
@@ -20859,9 +20990,12 @@ yargs_default(hideBin(process.argv)).scriptName("ddm").usage("$0 <command> [opti
   type: "boolean",
   default: false,
   describe: "只恢复 agent 文件，跳过 dependencies 安装和配置（用于离线验证）"
-}), async (args) => {
-  await cmdImport(args.input, { target: args.target, yes: args.yes, skipDeps: args["skip-deps"] });
-}).command("preview <input>", "读取 ddm:// 协议 URL 或本地 zip 文件中的 manifest.json", (y) => y.positional("input", {
+}), async (args) => cmdImport(args.input, {
+  target: args.target,
+  yes: args.yes,
+  skipDeps: args["skip-deps"],
+  env: importEnvVars()
+})).command("preview <input>", "读取 ddm:// 协议 URL 或本地 zip 文件中的 manifest.json", (y) => y.positional("input", {
   type: "string",
   describe: "ddm://import?pkg=<url>、ddm://import-agent?url=<url> 或 /path/to/file.zip",
   demandOption: true

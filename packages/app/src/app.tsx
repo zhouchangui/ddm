@@ -78,6 +78,23 @@ declare global {
     }
     api?: {
       setTitlebar?: (theme: { mode: "light" | "dark" }) => Promise<void>
+      previewDdmImport?: (pkgUrl: string) => Promise<
+        | {
+            success: true
+            downloadUrl: string
+            manifest: unknown
+            env?: Record<string, string>
+            dependencyState?: {
+              skills?: Record<string, { installed: boolean; location?: string }>
+            }
+          }
+        | { success: false; error?: string; downloadUrl?: string; manifest?: unknown }
+      >
+      runDdmImport?: (
+        pkgUrl: string,
+        opts?: { env?: Record<string, string> },
+      ) => Promise<{ success: boolean; error?: string }>
+      onDdmImportProgress?: (cb: (progress: { message: string }) => void) => () => void
     }
   }
 }
