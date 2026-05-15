@@ -127,7 +127,7 @@ jobs:
           # Unset signing vars entirely if no certificate is configured
           unset CSC_LINK CSC_KEY_PASSWORD APPLE_ID APPLE_APP_SPECIFIC_PASSWORD APPLE_TEAM_ID
           export CSC_IDENTITY_AUTO_DISCOVERY=false
-          bun run package:mac
+          bun run package:mac -- --publish never
 
       - name: Package Windows
         if: matrix.platform == 'win'
@@ -135,7 +135,7 @@ jobs:
         env:
           OPENCODE_CHANNEL: prod
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: bun run package:win
+        run: bun run package:win -- --publish never
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
