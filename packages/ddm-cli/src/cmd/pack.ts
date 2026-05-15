@@ -6,10 +6,11 @@ import JSZip from "jszip"
 import matter from "gray-matter"
 import {
   type AgentManifest,
-  type Dependencies,
-  type QuickCommand,
-  SCHEMA_VERSION,
-  validateManifest,
+  envVarKey,
+  isSafeRelativePath,
+  manifestAgentCommandName,
+  manifestAgentPaths,
+  manifestOpencodeSkillPaths,
   parseManifest,
 } from "../schema.js"
 
@@ -23,18 +24,34 @@ function readFileSafe(p: string): string | null {
   }
 }
 
-function walkDir(dir: string, ext: string): string[] {
+function walkFiles(dir: string): string[] {
   const results: string[] = []
   if (!fs.existsSync(dir)) return results
   for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
     const full = path.join(dir, entry.name)
-    if (entry.isDirectory()) {
-      results.push(...walkDir(full, ext))
-    } else if (entry.isFile() && entry.name.endsWith(ext)) {
-      results.push(full)
-    }
+    if (entry.isDirectory()) results.push(...walkFiles(full))
+    else if (entry.isFile()) results.push(full)
   }
   return results
+}
+
+function toZipPath(value: string): string {
+  return value.replace(/\\/g, "/")
+}
+
+function assertSafeRelativePath(rel: string, label: string): boolean {
+  if (isSafeRelativePath(rel)) return true
+  log.error(`${label} 不是安全相对路径: ${rel}`)
+  process.exitCode = 1
+  return false
+}
+
+function safeResolve(root: string, rel: string): string | undefined {
+  if (!isSafeRelativePath(rel)) return
+  const resolved = path.resolve(root, rel)
+  const base = path.resolve(root)
+  if (!resolved.startsWith(base + path.sep) && resolved !== base) return
+  return resolved
 }
 
 function resolveOpencodeConfig(baseDir = process.cwd()): string {
@@ -136,6 +153,43 @@ async function runCommand(cmd: string): Promise<{ ok: boolean; stderr: string }>
   return { ok: result.status === 0, stderr: "" }
 }
 
+function manifestPackageFiles(agentDir: string, manifest: AgentManifest): string[] | undefined {
+  const files = new Set<string>(["manifest.json"])
+  const readme = path.join(agentDir, "README.md")
+  if (fs.existsSync(readme)) files.add("README.md")
+
+  for (const agentPath of manifestAgentPaths(manifest)) {
+    if (!assertSafeRelativePath(agentPath, "agent 文件路径")) return
+    const full = safeResolve(agentDir, agentPath)
+    if (!full || !fs.existsSync(full) || !fs.statSync(full).isFile()) {
+      log.error(`manifest 声明的 agent 文件不存在: ${agentPath}`)
+      process.exitCode = 1
+      return
+    }
+    files.add(toZipPath(agentPath))
+  }
+
+  for (const skillPath of manifestOpencodeSkillPaths(manifest)) {
+    if (!assertSafeRelativePath(skillPath, "opencode skill 路径")) return
+    const full = safeResolve(agentDir, skillPath)
+    if (!full || !fs.existsSync(full) || !fs.statSync(full).isDirectory()) {
+      log.error(`manifest 声明的专属 skill 目录不存在: ${skillPath}`)
+      process.exitCode = 1
+      return
+    }
+    if (!fs.existsSync(path.join(full, "SKILL.md"))) {
+      log.error(`专属 skill 目录缺少 SKILL.md: ${skillPath}`)
+      process.exitCode = 1
+      return
+    }
+    for (const file of walkFiles(full)) {
+      files.add(toZipPath(path.relative(agentDir, file)))
+    }
+  }
+
+  return Array.from(files).sort()
+}
+
 // ─── PACK ─────────────────────────────────────────────────────
 
 interface PackOptions {
@@ -147,8 +201,9 @@ interface PackOptions {
  * ddm pack <agent-dir>
  *
  * 把 agent 目录打包成 zip：
- *   agent/<name>.md       → 主 agent 定义
- *   manifest.json         → 自动生成或使用目录中已有的
+ *   manifest.json              → 包契约
+ *   manifest.opencode.agent    → 当前格式主 agent 定义
+ *   manifest.opencode.skills[] → 当前格式专属技能目录
  */
 export async function cmdPack(opts: PackOptions): Promise<void> {
   intro("DDM Pack")
@@ -159,23 +214,6 @@ export async function cmdPack(opts: PackOptions): Promise<void> {
     process.exitCode = 1
     return
   }
-
-  const s = spinner()
-  s.start("扫描 agent 文件...")
-
-  // 找 agent/*.md
-  const agentMdDir = path.join(agentDir, "agent")
-  const agentFiles = walkDir(agentMdDir, ".md").map((f) => path.relative(agentDir, f).replace(/\\/g, "/"))
-
-  if (agentFiles.length === 0) {
-    s.stop("未找到 agent 定义文件", 1)
-    log.error(`在 ${agentMdDir} 下没有找到任何 .md 文件`)
-    log.info("agent 定义文件应放在 <agent-dir>/agent/<name>.md")
-    process.exitCode = 1
-    return
-  }
-
-  s.stop(`找到 ${agentFiles.length} 个 agent 文件`)
 
   // 读取或生成 manifest.json
   const manifestPath = path.join(agentDir, "manifest.json")
@@ -190,27 +228,30 @@ export async function cmdPack(opts: PackOptions): Promise<void> {
       process.exitCode = 1
       return
     }
-    // 同步 agents 列表
-    manifest.agents = agentFiles
   } else {
-    log.info("未找到 manifest.json，根据 agent 文件自动生成草稿")
-    manifest = await generateManifestDraft(agentDir, agentFiles)
-    fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2), "utf8")
-    log.warn(`已生成 manifest.json 草稿到 ${manifestPath}，请检查并补全后重新运行 ddm pack`)
-    process.exitCode = 0
+    log.error("未找到 manifest.json")
+    log.info("当前格式必须先在 agent 成品目录维护 manifest.json，再执行 ddm pack")
+    process.exitCode = 1
     return
   }
+
+  const packageFiles = manifestPackageFiles(agentDir, manifest)
+  if (!packageFiles) return
 
   // 打包
   const s2 = spinner()
   s2.start("打包 zip...")
 
   const zip = new JSZip()
-  zip.file("manifest.json", JSON.stringify(manifest, null, 2))
-
-  // 添加 agent 文件
-  for (const rel of agentFiles) {
-    const content = fs.readFileSync(path.join(agentDir, rel), "utf8")
+  for (const rel of packageFiles) {
+    const full = safeResolve(agentDir, rel)
+    if (!full) {
+      s2.stop("打包失败", 1)
+      log.error(`非法包内路径: ${rel}`)
+      process.exitCode = 1
+      return
+    }
+    const content = rel === "manifest.json" ? JSON.stringify(manifest, null, 2) : fs.readFileSync(full)
     zip.file(rel, content)
   }
 
@@ -224,7 +265,11 @@ export async function cmdPack(opts: PackOptions): Promise<void> {
   // 打印摘要
   log.info(`📦 包 ID : ${manifest.packageId}`)
   log.info(`📌 版本  : ${manifest.version}`)
-  log.info(`🤖 Agent : ${agentFiles.join(", ")}`)
+  log.info(`🤖 Agent : ${manifestAgentPaths(manifest).join(", ")}`)
+  const bundledSkills = manifestOpencodeSkillPaths(manifest)
+  if (bundledSkills.length) {
+    log.info(`🧩 内置 Skills: ${bundledSkills.join(", ")}`)
+  }
   if (manifest.dependencies.skills?.length) {
     log.info(`🔧 Skills: ${manifest.dependencies.skills.map((s) => s.name).join(", ")}`)
   }
@@ -236,33 +281,6 @@ export async function cmdPack(opts: PackOptions): Promise<void> {
   }
 
   outro("Pack 完成")
-}
-
-async function generateManifestDraft(agentDir: string, agentFiles: string[]): Promise<AgentManifest> {
-  // 从第一个 agent 文件读 frontmatter 提取基本信息
-  const firstAgent = path.join(agentDir, agentFiles[0])
-  const parsed = matter(fs.readFileSync(firstAgent, "utf8"))
-  const agentName = path.basename(agentFiles[0], ".md")
-
-  return {
-    schemaVersion: SCHEMA_VERSION,
-    packageId: `ddm.${agentName}`,
-    version: "0.1.0",
-    name: (parsed.data.description as string) ?? agentName,
-    summary: "请填写 20-40 字的一句话说明",
-    description: "请填写 80-160 字的适用场景、核心能力和主要产出说明",
-    tags: ["请填写", "领域标签", "3-5个"],
-    quickCommands: [
-      {
-        id: "start",
-        label: "开始任务",
-        prompt: "请填写用户点击后发送给 agent 的完整任务指令",
-      },
-    ] satisfies QuickCommand[],
-    agents: agentFiles,
-    dependencies: {} satisfies Dependencies,
-    changeSummary: "初始版本",
-  }
 }
 
 // ─── UNPACK ───────────────────────────────────────────────────
@@ -277,12 +295,47 @@ interface UnpackOptions {
 
 const cleanEnvValue = (value: string) => value.replaceAll("\n", "").replaceAll("\r", "")
 
+function zipContainsPrefix(zip: JSZip, prefix: string): boolean {
+  const normalized = toZipPath(prefix).replace(/\/+$/, "")
+  return Object.values(zip.files).some((file) => !file.dir && (file.name === normalized || file.name.startsWith(`${normalized}/`)))
+}
+
+async function copyZipFile(zip: JSZip, rel: string, dest: string): Promise<boolean> {
+  const file = zip.file(rel)
+  if (!file) return false
+  fs.mkdirSync(path.dirname(dest), { recursive: true })
+  fs.writeFileSync(dest, await file.async("nodebuffer"))
+  return true
+}
+
+async function copyZipPrefix(zip: JSZip, prefix: string, destRoot: string): Promise<number> {
+  const normalized = toZipPath(prefix).replace(/\/+$/, "")
+  const root = path.resolve(destRoot)
+  let copied = 0
+  for (const file of Object.values(zip.files)) {
+    if (file.dir || (file.name !== normalized && !file.name.startsWith(`${normalized}/`))) continue
+    const relInside = file.name === normalized ? path.basename(file.name) : file.name.slice(normalized.length + 1)
+    if (!relInside || relInside.split("/").some((part) => part === ".." || part === "")) continue
+    const dest = path.resolve(root, relInside)
+    if (!dest.startsWith(root + path.sep) && dest !== root) continue
+    fs.mkdirSync(path.dirname(dest), { recursive: true })
+    fs.writeFileSync(dest, await file.async("nodebuffer"))
+    copied++
+  }
+  return copied
+}
+
+function agentInstallPath(opencodeDir: string, manifest: AgentManifest, agentPath: string): string {
+  if (manifest.opencode?.agent) return path.join(opencodeDir, "agent", path.basename(agentPath))
+  return path.resolve(opencodeDir, agentPath)
+}
+
 /**
  * ddm unpack <file.zip>
  *
  * 从 zip 还原 agent 到 OpenCode 执行环境：
  * 1. 解压 manifest.json 读取依赖
- * 2. 复制 agent/*.md → .opencode/agent/
+ * 2. 复制 manifest.opencode.agent → .opencode/agent/
  * 3. 执行 skills installCommand
  * 4. 合并 mcp 配置到 opencode.jsonc
  * 5. 启动 docker 服务
@@ -322,7 +375,9 @@ export async function cmdUnpack(opts: UnpackOptions): Promise<void> {
 
     const deps = manifest.dependencies
     if (deps.skills?.length) {
-      const skills = deps.skills.map((skill) => ({ skill, existing: installedSkillLocation(skill.name, opts.target) }))
+      const skills = deps.skills
+        .filter((skill) => skill.name)
+        .map((skill) => ({ skill, existing: installedSkillLocation(skill.name, opts.target) }))
       const toInstall = skills.filter((item) => !item.existing).map((item) => item.skill.name)
       const installed = skills.filter((item) => item.existing).map((item) => item.skill.name)
       if (toInstall.length) log.info(`🔧 将安装 Skills: ${toInstall.join(", ")}`)
@@ -334,7 +389,8 @@ export async function cmdUnpack(opts: UnpackOptions): Promise<void> {
       log.info(
         `🔑 需要填写环境变量: ${deps.envVars
           .filter((e) => e.required)
-          .map((e) => e.key)
+          .map((e) => envVarKey(e))
+          .filter((key): key is string => !!key)
           .join(", ")}`,
       )
     }
@@ -356,30 +412,52 @@ export async function cmdUnpack(opts: UnpackOptions): Promise<void> {
   const s1 = spinner()
   s1.start("复制 agent 文件...")
   let copied = 0
-  for (const agentPath of manifest.agents) {
-    const file = zip.file(agentPath)
-    if (!file) {
-      log.warn(`manifest 中声明的文件不在 zip 内: ${agentPath}`)
+  for (const agentPath of manifestAgentPaths(manifest)) {
+    if (!isSafeRelativePath(agentPath)) {
+      log.warn(`跳过非法 agent 路径: ${agentPath}`)
       continue
     }
-    const dest = path.resolve(opencodeDir, agentPath)
-    // 防止 ZIP Slip：拒绝路径遍历到目标目录之外
-    if (!dest.startsWith(path.resolve(opencodeDir) + path.sep) && dest !== path.resolve(opencodeDir)) {
+    const dest = agentInstallPath(opencodeDir, manifest, agentPath)
+    const opencodeRoot = path.resolve(opencodeDir)
+    if (!dest.startsWith(opencodeRoot + path.sep) && dest !== opencodeRoot) {
       log.warn(`跳过非法路径（路径遍历）: ${agentPath}`)
       continue
     }
-    fs.mkdirSync(path.dirname(dest), { recursive: true })
-    fs.writeFileSync(dest, await file.async("string"), "utf8")
+    const ok = await copyZipFile(zip, agentPath, dest)
+    if (!ok) {
+      log.warn(`manifest 中声明的文件不在 zip 内: ${agentPath}`)
+      continue
+    }
     copied++
   }
   s1.stop(`已复制 ${copied} 个 agent 文件到 ${opencodeDir}/agent/`)
+
+  const bundledSkills = manifestOpencodeSkillPaths(manifest)
+  if (bundledSkills.length > 0) {
+    const sSkills = spinner()
+    sSkills.start("复制包内专属 skills...")
+    let skillFilesCopied = 0
+    const skillsDir = path.join(opencodeDir, "skills")
+    for (const skillPath of bundledSkills) {
+      if (!isSafeRelativePath(skillPath)) {
+        log.warn(`跳过非法 skill 路径: ${skillPath}`)
+        continue
+      }
+      if (!zipContainsPrefix(zip, skillPath) || !zip.file(`${skillPath.replace(/\/+$/, "")}/SKILL.md`)) {
+        log.warn(`manifest 中声明的 skill 目录不完整: ${skillPath}`)
+        continue
+      }
+      skillFilesCopied += await copyZipPrefix(zip, skillPath, path.join(skillsDir, path.basename(skillPath)))
+    }
+    sSkills.stop(`已复制 ${skillFilesCopied} 个 skill 文件到 ${skillsDir}/`)
+  }
 
   const deps = manifest.dependencies
 
   if (opts.skipDeps) {
     log.warn("已跳过 dependencies 安装和配置")
     log.success(`${manifest.name} 导入完成！`)
-    log.info(`重启 OpenCode 后即可使用 @${path.basename(manifest.agents[0], ".md")} 调用此 agent`)
+    log.info(`重启 OpenCode 后即可使用 @${manifestAgentCommandName(manifest)} 调用此 agent`)
     outro("Unpack 完成")
     return
   }
@@ -387,9 +465,16 @@ export async function cmdUnpack(opts: UnpackOptions): Promise<void> {
   // 2. 安装 Skills
   if (deps.skills && deps.skills.length > 0) {
     for (const skill of deps.skills) {
+      if (!skill.name) continue
       const existing = installedSkillLocation(skill.name, opts.target)
       if (existing) {
         log.info(`skill 已存在，跳过安装: ${skill.name} (${existing})`)
+        continue
+      }
+
+      if (!skill.installCommand) {
+        log.warn(`skill 未安装且未声明 installCommand: ${skill.name}`)
+        if (skill.required) log.warn("此 skill 标记为必需，请先按发布说明手动安装")
         continue
       }
 
@@ -488,31 +573,33 @@ export async function cmdUnpack(opts: UnpackOptions): Promise<void> {
 
     const envLines: string[] = []
     for (const ev of deps.envVars) {
-      const supplied = opts.env?.[ev.key]
+      const key = envVarKey(ev)
+      if (!key) continue
+      const supplied = opts.env?.[key]
       if (supplied) {
-        envLines.push(`${ev.key}=${cleanEnvValue(supplied)}`)
+        envLines.push(`${key}=${cleanEnvValue(supplied)}`)
         continue
       }
       if (opts.yes) {
-        log.warn(`  ${ev.required ? "[必须]" : "[可选]"} ${ev.key}`)
+        log.warn(`  ${ev.required ? "[必须]" : "[可选]"} ${key}`)
         log.info(`         ${ev.description}`)
         if (ev.example) log.info(`         示例: ${ev.example}`)
-        envLines.push(`${ev.key}=`)
+        envLines.push(`${key}=`)
       } else {
-        log.info(`  ${ev.required ? "【必填】" : "【可选】"} ${ev.key}`)
+        log.info(`  ${ev.required ? "【必填】" : "【可选】"} ${key}`)
         log.info(`         ${ev.description}`)
         if (ev.example) log.info(`         示例: ${ev.example}`)
 
         if (ev.required) {
           const val = await text({
-            message: `请输入 ${ev.key}`,
+            message: `请输入 ${key}`,
             placeholder: ev.example ?? "",
           })
           if (val && typeof val === "string") {
-            envLines.push(`${ev.key}=${val}`)
+            envLines.push(`${key}=${val}`)
           }
         } else {
-          envLines.push(`# ${ev.key}=  # ${ev.description}`)
+          envLines.push(`# ${key}=  # ${ev.description}`)
         }
       }
     }
@@ -534,7 +621,7 @@ export async function cmdUnpack(opts: UnpackOptions): Promise<void> {
 
   log.info("")
   log.success(`${manifest.name} 导入完成！`)
-  log.info(`重启 OpenCode 后即可使用 @${path.basename(manifest.agents[0], ".md")} 调用此 agent`)
+  log.info(`重启 OpenCode 后即可使用 @${manifestAgentCommandName(manifest)} 调用此 agent`)
 
   outro("Unpack 完成")
 }
@@ -544,4 +631,79 @@ export async function readManifestFromZip(zipPath: string): Promise<AgentManifes
   const manifestFile = zip.file("manifest.json")
   if (!manifestFile) throw new Error("zip 包中缺少 manifest.json")
   return parseManifest(await manifestFile.async("string"))
+}
+
+interface VerifyOptions {
+  zipPath: string
+}
+
+export async function cmdVerify(opts: VerifyOptions): Promise<void> {
+  intro("DDM Verify")
+
+  const zipPath = path.resolve(opts.zipPath)
+  if (!fs.existsSync(zipPath)) {
+    log.error(`文件不存在: ${zipPath}`)
+    process.exitCode = 1
+    return
+  }
+
+  const zip = await JSZip.loadAsync(fs.readFileSync(zipPath))
+  const manifestFile = zip.file("manifest.json")
+  let manifest: AgentManifest
+  try {
+    if (!manifestFile) throw new Error("zip 包中缺少 manifest.json")
+    manifest = parseManifest(await manifestFile.async("string"))
+  } catch (e) {
+    log.error(String(e))
+    process.exitCode = 1
+    return
+  }
+
+  const errors: string[] = []
+  for (const agentPath of manifestAgentPaths(manifest)) {
+    if (!zip.file(agentPath)) errors.push(`缺少 agent 文件: ${agentPath}`)
+  }
+  for (const skillPath of manifestOpencodeSkillPaths(manifest)) {
+    const normalized = skillPath.replace(/\/+$/, "")
+    if (!zipContainsPrefix(zip, normalized)) errors.push(`缺少专属 skill 目录: ${skillPath}`)
+    if (!zip.file(`${normalized}/SKILL.md`)) errors.push(`专属 skill 缺少 SKILL.md: ${skillPath}`)
+  }
+
+  if (errors.length > 0) {
+    for (const error of errors) log.error(error)
+    process.exitCode = 1
+    return
+  }
+
+  const tmpProject = fs.mkdtempSync(path.join(os.tmpdir(), "ddm-verify-"))
+  try {
+    await cmdUnpack({
+      zipPath,
+      target: tmpProject,
+      yes: true,
+      skipDeps: true,
+    })
+
+    const opencodeDir = path.join(tmpProject, ".opencode")
+    for (const agentPath of manifestAgentPaths(manifest)) {
+      const installed = agentInstallPath(opencodeDir, manifest, agentPath)
+      if (!fs.existsSync(installed)) errors.push(`本地导入后未找到 agent 文件: ${installed}`)
+    }
+    for (const skillPath of manifestOpencodeSkillPaths(manifest)) {
+      const installed = path.join(opencodeDir, "skills", path.basename(skillPath), "SKILL.md")
+      if (!fs.existsSync(installed)) errors.push(`本地导入后未找到 skill 文件: ${installed}`)
+    }
+  } finally {
+    fs.rmSync(tmpProject, { recursive: true, force: true })
+  }
+
+  if (errors.length > 0) {
+    for (const error of errors) log.error(error)
+    process.exitCode = 1
+    return
+  }
+
+  log.success(`${manifest.packageId} v${manifest.version} 本地 zip 验证通过`)
+  log.info(`已验证 manifest、包内文件，以及离线导入到临时 OpenCode 目录`)
+  outro("Verify 完成")
 }

@@ -175,7 +175,11 @@ const manifestEnvKeys = (manifest: unknown) => {
   const envVars = (dependencies as { envVars?: unknown }).envVars
   if (!Array.isArray(envVars)) return []
   return envVars
-    .map((item) => (item && typeof item === "object" && "key" in item ? item.key : undefined))
+    .map((item) => {
+      if (!item || typeof item !== "object") return undefined
+      if ("name" in item && typeof item.name === "string") return item.name
+      return undefined
+    })
     .filter((key): key is string => typeof key === "string" && key.length > 0)
 }
 

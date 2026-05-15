@@ -9,12 +9,12 @@ export const SCHEMA_VERSION = "1" as const
 
 // ─── 依赖声明 ───────────────────────────────────────────────
 
-/** Skill 依赖：通过 npx skills add 安装 */
+/** Skill 依赖：通过 installCommand 安装；没有 installCommand 时仅做本地存在性提示 */
 export interface SkillDep {
   /** skill 的唯一标识，用于日志和去重检查 */
   name: string
   /** 完整的安装命令，unpack 时原样执行 */
-  installCommand: string
+  installCommand?: string
   /** 这个 skill 的用途说明（人读） */
   description: string
   /** 是否必须安装才能正常使用 agent */
@@ -73,7 +73,7 @@ export interface AppDep {
 /** 环境变量依赖：unpack 时提示用户填写 */
 export interface EnvVarDep {
   /** 环境变量名，如 FIGMA_API_KEY */
-  key: string
+  name: string
   /** 用途和获取方式说明（人读） */
   description: string
   /** 是否必须设置才能正常使用 agent */
@@ -94,6 +94,25 @@ export interface Dependencies {
   apps?: AppDep[]
   /** 环境变量依赖列表 */
   envVars?: EnvVarDep[]
+}
+
+/** OpenCode 运行时文件入口 */
+export interface OpencodeManifest {
+  /** agent 定义文件路径，例如 "visual-designer.md" */
+  agent: string
+  /** 包内专属技能目录，例如 ["skills/visual-research"] */
+  skills: string[]
+}
+
+/** 定时任务声明，由导入器或平台调度系统安装 */
+export interface ScheduleManifest {
+  id: string
+  label: string
+  prompt: string
+  timezone: string
+  cron?: string
+  every?: string
+  enabledDefault: boolean
 }
 
 // ─── 快速命令 ───────────────────────────────────────────────
@@ -118,6 +137,8 @@ export interface AgentManifest {
   // 包标识
   /** 全局唯一包 ID，格式建议 "域名.名称"，如 "ddm.visual-designer" */
   packageId: string
+  /** 成品仓 agent 目录名，当前格式要求与 packageId 的后缀一致 */
+  agentId?: string
   /** semver 版本号 */
   version: string
 
@@ -134,16 +155,46 @@ export interface AgentManifest {
   // 快速命令（3-6 条）
   quickCommands: QuickCommand[]
 
-  // 包内文件（相对于 zip 根目录的路径）
-  /** agent 定义文件列表，如 ["agent/visual-designer.md"] */
-  agents: string[]
+  // OpenCode 入口（当前格式）
+  opencode?: OpencodeManifest
 
   // 依赖声明（unpack 时按此安装/配置）
   dependencies: Dependencies
 
+  /** 定时任务契约；没有时为空数组 */
+  schedules?: ScheduleManifest[]
+
   // 版本信息
   /** 本版本的变更摘要，用于审核和用户了解更新内容 */
   changeSummary: string
+}
+
+export function isSafeRelativePath(value: string): boolean {
+  if (!value || pathIsAbsolute(value)) return false
+  const normalized = value.replace(/\\/g, "/")
+  if (normalized.startsWith("/") || normalized.includes("\0")) return false
+  return !normalized.split("/").some((part) => part === "" || part === "." || part === "..")
+}
+
+function pathIsAbsolute(value: string): boolean {
+  return value.startsWith("/") || /^[A-Za-z]:[\\/]/.test(value)
+}
+
+export function manifestAgentPaths(manifest: AgentManifest): string[] {
+  return manifest.opencode?.agent ? [manifest.opencode.agent] : []
+}
+
+export function manifestOpencodeSkillPaths(manifest: AgentManifest): string[] {
+  return manifest.opencode?.skills ?? []
+}
+
+export function manifestAgentCommandName(manifest: AgentManifest): string {
+  const first = manifestAgentPaths(manifest)[0] ?? manifest.agentId ?? manifest.packageId
+  return first.split("/").pop()?.replace(/\.md$/i, "") ?? first
+}
+
+export function envVarKey(envVar: EnvVarDep): string | undefined {
+  return envVar.name
 }
 
 // ─── 验证 ────────────────────────────────────────────────────
@@ -200,12 +251,67 @@ export function validateManifest(data: unknown): ManifestValidationError[] {
     }
   }
 
-  if (!Array.isArray(m.agents) || m.agents.length < 1) {
-    errors.push(new ManifestValidationError("agents 至少需要 1 个文件路径", "agents"))
+  const opencode = m.opencode as Record<string, unknown> | undefined
+  const hasOpencode = !!opencode && typeof opencode === "object" && !Array.isArray(opencode)
+
+  if ("agents" in m) {
+    errors.push(new ManifestValidationError("agents 已废弃，请使用 opencode.agent", "agents"))
+  }
+
+  if (!hasOpencode) {
+    errors.push(new ManifestValidationError("opencode 是必填对象", "opencode"))
+  } else {
+    if (!m.agentId || typeof m.agentId !== "string") {
+      errors.push(new ManifestValidationError("当前格式必须声明 agentId", "agentId"))
+    }
+    if (!opencode.agent || typeof opencode.agent !== "string") {
+      errors.push(new ManifestValidationError("opencode.agent 是必填字符串", "opencode.agent"))
+    } else if (!isSafeRelativePath(opencode.agent)) {
+      errors.push(new ManifestValidationError("opencode.agent 必须是安全相对路径", "opencode.agent"))
+    }
+    if (!Array.isArray(opencode.skills)) {
+      errors.push(new ManifestValidationError("opencode.skills 必须是数组", "opencode.skills"))
+    } else {
+      for (const [i, skillPath] of opencode.skills.entries()) {
+        if (typeof skillPath !== "string" || !isSafeRelativePath(skillPath)) {
+          errors.push(new ManifestValidationError(`opencode.skills[${i}] 必须是安全相对路径`, `opencode.skills.${i}`))
+        }
+      }
+    }
   }
 
   if (!m.dependencies || typeof m.dependencies !== "object") {
     errors.push(new ManifestValidationError("dependencies 是必填对象", "dependencies"))
+  } else {
+    const deps = m.dependencies as Record<string, unknown>
+    for (const field of ["skills", "mcp", "docker", "apps", "envVars"] as const) {
+      if (deps[field] !== undefined && !Array.isArray(deps[field])) {
+        errors.push(new ManifestValidationError(`dependencies.${field} 必须是数组`, `dependencies.${field}`))
+      }
+    }
+  }
+
+  if (m.schedules !== undefined) {
+    if (!Array.isArray(m.schedules)) {
+      errors.push(new ManifestValidationError("schedules 必须是数组", "schedules"))
+    } else {
+      for (const [i, schedule] of (m.schedules as unknown[]).entries()) {
+        const item = schedule as Record<string, unknown>
+        for (const f of ["id", "label", "prompt", "timezone"] as const) {
+          if (!item[f] || typeof item[f] !== "string") {
+            errors.push(new ManifestValidationError(`schedules[${i}].${f} 是必填字符串`, `schedules.${i}.${f}`))
+          }
+        }
+        if (typeof item.enabledDefault !== "boolean") {
+          errors.push(
+            new ManifestValidationError(`schedules[${i}].enabledDefault 是必填布尔值`, `schedules.${i}.enabledDefault`),
+          )
+        }
+        if (!item.cron && !item.every) {
+          errors.push(new ManifestValidationError(`schedules[${i}] 必须声明 cron 或 every`, `schedules.${i}`))
+        }
+      }
+    }
   }
 
   return errors

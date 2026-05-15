@@ -45,21 +45,27 @@ type AppDep = {
 }
 
 type EnvVarDep = {
-  key?: string
+  name?: string
   description?: string
   required?: boolean
   example?: string
 }
 
+type OpencodeManifest = {
+  agent?: string
+  skills?: string[]
+}
+
 type AgentManifest = {
   schemaVersion?: string
   packageId?: string
+  agentId?: string
   version?: string
   name?: string
   summary?: string
   description?: string
   tags?: string[]
-  agents?: string[]
+  opencode?: OpencodeManifest
   dependencies?: {
     skills?: SkillDep[]
     mcp?: McpDep[]
@@ -83,6 +89,7 @@ const list = (value: unknown) =>
   Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : []
 const records = <T extends Record<string, unknown>>(value: unknown) =>
   Array.isArray(value) ? (value.filter(isRecord) as T[]) : []
+const manifestAgentFiles = (manifest: AgentManifest) => (hasText(manifest.opencode?.agent) ? [manifest.opencode!.agent!] : [])
 
 function RequiredBadge(props: { required?: boolean }) {
   return (
@@ -184,7 +191,7 @@ export function DialogDdmImportAgent(props: { pkgUrl: string }) {
     if (result?.success) return result.dependencyState ?? {}
     return {}
   })
-  const envVars = createMemo(() => records<EnvVarDep>(dependencies().envVars).filter((item) => hasText(item.key)))
+  const envVars = createMemo(() => records<EnvVarDep>(dependencies().envVars).filter((item) => hasText(item.name)))
   const skillDeps = createMemo(() =>
     records<SkillDep>(dependencies().skills).filter(
       (item) => hasText(item.name) || hasText(item.installCommand) || hasText(item.description),
@@ -223,13 +230,16 @@ export function DialogDdmImportAgent(props: { pkgUrl: string }) {
   })
   const missingRequired = createMemo(() =>
     envVars()
-      .filter((item) => item.required && item.key)
-      .filter((item) => !env[item.key!]?.trim()),
+      .filter((item) => item.required && item.name)
+      .filter((item) => !env[item.name!]?.trim()),
   )
   const importEnv = () =>
     Object.fromEntries(
       envVars()
-        .map((item) => (item.key && env[item.key]?.trim() ? [item.key, env[item.key].trim()] : undefined))
+        .map((item) => {
+          const key = item.name
+          return key && env[key]?.trim() ? [key, env[key].trim()] : undefined
+        })
         .filter((item): item is [string, string] => !!item),
     )
   const sourceUrl = createMemo(() => preview()?.downloadUrl ?? props.pkgUrl)
@@ -240,7 +250,7 @@ export function DialogDdmImportAgent(props: { pkgUrl: string }) {
     const result = preview()
     if (!result?.success || prefilledFor() === props.pkgUrl) return
     Object.entries(result.env ?? {})
-      .filter(([key, value]) => envVars().some((item) => item.key === key) && value.trim())
+      .filter(([key, value]) => envVars().some((item) => item.name === key) && value.trim())
       .forEach(([key, value]) => setEnv(key, value))
     setPrefilledFor(props.pkgUrl)
   })
@@ -255,7 +265,7 @@ export function DialogDdmImportAgent(props: { pkgUrl: string }) {
     if (missingRequired().length > 0) {
       setError(
         `请填写必需环境变量：${missingRequired()
-          .map((item) => item.key)
+          .map((item) => item.name)
           .join(", ")}`,
       )
       return
@@ -316,7 +326,13 @@ export function DialogDdmImportAgent(props: { pkgUrl: string }) {
                   <InfoRow label="来源" value={sourceUrl()} />
                   <InfoRow
                     label="Agent 文件"
-                    value={list(manifest().agents).length ? list(manifest().agents).join(", ") : "未声明"}
+                    value={manifestAgentFiles(manifest()).length ? manifestAgentFiles(manifest()).join(", ") : "未声明"}
+                  />
+                  <InfoRow
+                    label="内置 Skills"
+                    value={
+                      list(manifest().opencode?.skills).length ? list(manifest().opencode?.skills).join(", ") : "无"
+                    }
                   />
                   <InfoRow
                     label="标签"
@@ -352,41 +368,44 @@ export function DialogDdmImportAgent(props: { pkgUrl: string }) {
                   <Section title="环境变量" count={envVars().length}>
                     <div class="grid gap-3">
                       <For each={envVars()}>
-                        {(item) => (
-                          <div class="rounded-md bg-surface-base p-3 shadow-xs-border-base">
-                            <div class="mb-2 flex items-start justify-between gap-3">
-                              <div>
-                                <div class="text-13-medium text-text-strong">{text(item.key)}</div>
-                                <div class="mt-1 text-12-regular text-text-weak break-words">
-                                  {text(item.description)}
+                        {(item) => {
+                          const key = createMemo(() => item.name)
+                          return (
+                            <div class="rounded-md bg-surface-base p-3 shadow-xs-border-base">
+                              <div class="mb-2 flex items-start justify-between gap-3">
+                                <div>
+                                  <div class="text-13-medium text-text-strong">{text(key())}</div>
+                                  <div class="mt-1 text-12-regular text-text-weak break-words">
+                                    {text(item.description)}
+                                  </div>
+                                </div>
+                                <div class="flex shrink-0 items-center gap-2">
+                                  <Show when={key() && localEnv()[key()!] && env[key()!]?.trim()}>
+                                    <span class="rounded-sm bg-surface-success-weak px-1.5 py-0.5 text-text-on-success-strong">
+                                      <Checkbox checked readOnly>
+                                        <span class="text-11-medium">本地已填入</span>
+                                      </Checkbox>
+                                    </span>
+                                  </Show>
+                                  <RequiredBadge required={item.required} />
                                 </div>
                               </div>
-                              <div class="flex shrink-0 items-center gap-2">
-                                <Show when={item.key && localEnv()[item.key] && env[item.key]?.trim()}>
-                                  <span class="rounded-sm bg-surface-success-weak px-1.5 py-0.5 text-text-on-success-strong">
-                                    <Checkbox checked readOnly>
-                                      <span class="text-11-medium">本地已填入</span>
-                                    </Checkbox>
-                                  </span>
-                                </Show>
-                                <RequiredBadge required={item.required} />
-                              </div>
+                              <Show when={key()}>
+                                <TextField
+                                  type="password"
+                                  label={`${key()} 值`}
+                                  hideLabel
+                                  placeholder={item.example ?? "输入后会写入 .opencode/.env"}
+                                  value={env[key()!] ?? ""}
+                                  disabled={importing()}
+                                  validationState={item.required && !env[key()!]?.trim() ? "invalid" : "valid"}
+                                  error={item.required && !env[key()!]?.trim() ? "必填" : undefined}
+                                  onChange={(value) => setEnv(key()!, value)}
+                                />
+                              </Show>
                             </div>
-                            <Show when={item.key}>
-                              <TextField
-                                type="password"
-                                label={`${item.key} 值`}
-                                hideLabel
-                                placeholder={item.example ?? "输入后会写入 .opencode/.env"}
-                                value={env[item.key!] ?? ""}
-                                disabled={importing()}
-                                validationState={item.required && !env[item.key!]?.trim() ? "invalid" : "valid"}
-                                error={item.required && !env[item.key!]?.trim() ? "必填" : undefined}
-                                onChange={(value) => setEnv(item.key!, value)}
-                              />
-                            </Show>
-                          </div>
-                        )}
+                          )
+                        }}
                       </For>
                     </div>
                   </Section>

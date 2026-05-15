@@ -1,6 +1,6 @@
 import yargs from "yargs"
 import { hideBin } from "yargs/helpers"
-import { cmdPack, cmdUnpack } from "./cmd/pack.js"
+import { cmdPack, cmdUnpack, cmdVerify } from "./cmd/pack.js"
 import { cmdLogin, cmdSetup, cmdImport, cmdPreview } from "./cmd/auth.js"
 
 function importEnvVars() {
@@ -26,7 +26,7 @@ yargs(hideBin(process.argv))
       y
         .positional("agent-dir", {
           type: "string",
-          describe: "包含 agent/*.md 和 manifest.json 的目录",
+          describe: "包含 <agentId>.md 和 manifest.json 的当前格式 agent 目录",
           demandOption: true,
         })
         .option("out", {
@@ -69,6 +69,23 @@ yargs(hideBin(process.argv))
         zipPath: args.zip as string,
         target: args.target,
         yes: args.yes,
+      })
+    },
+  )
+
+  // ─── verify ──────────────────────────────────────────────
+  .command(
+    "verify <zip>",
+    "本地验证 zip 包 manifest、包内文件和离线导入结果",
+    (y) =>
+      y.positional("zip", {
+        type: "string",
+        describe: "agent zip 文件路径",
+        demandOption: true,
+      }),
+    async (args) => {
+      await cmdVerify({
+        zipPath: args.zip as string,
       })
     },
   )
