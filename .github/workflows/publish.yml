@@ -4,9 +4,8 @@ run-name: "${{ format('release {0}', inputs.bump) }}"
 on:
   push:
     branches:
-      - ci
+      - main
       - dev
-      - beta
       - snapshot-*
   workflow_dispatch:
     inputs:

@@ -3,8 +3,8 @@ name: deploy
 on:
   push:
     branches:
+      - main
       - dev
-      - production
   workflow_dispatch:
 
 concurrency: ${{ github.workflow }}-${{ github.ref }}
