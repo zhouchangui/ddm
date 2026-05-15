@@ -10,6 +10,7 @@ import {
   isSafeRelativePath,
   manifestAgentCommandName,
   manifestAgentPaths,
+  manifestMediaPaths,
   manifestOpencodeSkillPaths,
   parseManifest,
 } from "../schema.js"
@@ -185,6 +186,22 @@ function manifestPackageFiles(agentDir: string, manifest: AgentManifest): string
     for (const file of walkFiles(full)) {
       files.add(toZipPath(path.relative(agentDir, file)))
     }
+  }
+
+  for (const mediaPath of manifestMediaPaths(manifest)) {
+    if (!assertSafeRelativePath(mediaPath, "media 文件路径")) return
+    if (!mediaPath.startsWith("media/")) {
+      log.error(`manifest.media.path 必须位于 media/ 目录下: ${mediaPath}`)
+      process.exitCode = 1
+      return
+    }
+    const full = safeResolve(agentDir, mediaPath)
+    if (!full || !fs.existsSync(full) || !fs.statSync(full).isFile()) {
+      log.error(`manifest 声明的 media 文件不存在: ${mediaPath}`)
+      process.exitCode = 1
+      return
+    }
+    files.add(toZipPath(mediaPath))
   }
 
   return Array.from(files).sort()

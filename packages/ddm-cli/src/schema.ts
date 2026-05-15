@@ -115,6 +115,28 @@ export interface ScheduleManifest {
   enabledDefault: boolean
 }
 
+// ─── 展示媒体 ───────────────────────────────────────────────
+
+export interface MediaAsset {
+  path: string
+  alt: string
+  caption?: string
+}
+
+export interface GalleryMediaAsset extends MediaAsset {
+  kind: string
+}
+
+export interface AgentMedia {
+  avatar: MediaAsset
+  cover: MediaAsset
+  gallery: GalleryMediaAsset[]
+  theme: {
+    accent: string
+    background: string
+  }
+}
+
 // ─── 快速命令 ───────────────────────────────────────────────
 
 /** 快速启动命令，展示在 DDM 平台 agent 详情页 */
@@ -152,6 +174,9 @@ export interface AgentManifest {
   /** 3-5 个面向用户的领域词，不使用内部技术词 */
   tags: string[]
 
+  /** homepage 和市场页使用的包内展示媒体 */
+  media: AgentMedia
+
   // 快速命令（3-6 条）
   quickCommands: QuickCommand[]
 
@@ -186,6 +211,14 @@ export function manifestAgentPaths(manifest: AgentManifest): string[] {
 
 export function manifestOpencodeSkillPaths(manifest: AgentManifest): string[] {
   return manifest.opencode?.skills ?? []
+}
+
+export function manifestMediaPaths(manifest: AgentManifest): string[] {
+  return [
+    manifest.media.avatar.path,
+    manifest.media.cover.path,
+    ...manifest.media.gallery.map((item) => item.path),
+  ]
 }
 
 export function manifestAgentCommandName(manifest: AgentManifest): string {
@@ -246,6 +279,52 @@ export function validateManifest(data: unknown): ManifestValidationError[] {
       for (const f of ["id", "label", "prompt"] as const) {
         if (!q[f] || typeof q[f] !== "string") {
           errors.push(new ManifestValidationError(`quickCommands[${i}].${f} 是必填字符串`, `quickCommands.${i}.${f}`))
+        }
+      }
+    }
+  }
+
+  const media = m.media as Record<string, unknown> | undefined
+  if (!media || typeof media !== "object" || Array.isArray(media)) {
+    errors.push(new ManifestValidationError("media 是必填对象", "media"))
+  } else {
+    const validateMediaAsset = (value: unknown, field: string, requireKind = false) => {
+      const asset = value as Record<string, unknown> | undefined
+      if (!asset || typeof asset !== "object" || Array.isArray(asset)) {
+        errors.push(new ManifestValidationError(`${field} 是必填对象`, field))
+        return
+      }
+      if (typeof asset.path !== "string" || !isSafeRelativePath(asset.path) || !asset.path.startsWith("media/")) {
+        errors.push(new ManifestValidationError(`${field}.path 必须是 media/ 下的安全相对路径`, `${field}.path`))
+      }
+      if (typeof asset.alt !== "string" || !asset.alt.trim()) {
+        errors.push(new ManifestValidationError(`${field}.alt 是必填字符串`, `${field}.alt`))
+      }
+      if (asset.caption !== undefined && (typeof asset.caption !== "string" || !asset.caption.trim())) {
+        errors.push(new ManifestValidationError(`${field}.caption 必须是非空字符串`, `${field}.caption`))
+      }
+      if (requireKind && (typeof asset.kind !== "string" || !asset.kind.trim())) {
+        errors.push(new ManifestValidationError(`${field}.kind 是必填字符串`, `${field}.kind`))
+      }
+    }
+
+    validateMediaAsset(media.avatar, "media.avatar")
+    validateMediaAsset(media.cover, "media.cover")
+    if (!Array.isArray(media.gallery) || media.gallery.length < 1) {
+      errors.push(new ManifestValidationError("media.gallery 至少需要 1 张图片", "media.gallery"))
+    } else {
+      for (const [index, item] of media.gallery.entries()) {
+        validateMediaAsset(item, `media.gallery.${index}`, true)
+      }
+    }
+    const theme = media.theme as Record<string, unknown> | undefined
+    if (!theme || typeof theme !== "object" || Array.isArray(theme)) {
+      errors.push(new ManifestValidationError("media.theme 是必填对象", "media.theme"))
+    } else {
+      for (const field of ["accent", "background"] as const) {
+        const value = theme[field]
+        if (typeof value !== "string" || !value.trim()) {
+          errors.push(new ManifestValidationError(`media.theme.${field} 是必填字符串`, `media.theme.${field}`))
         }
       }
     }
