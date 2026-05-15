@@ -38,6 +38,7 @@ interface StoredSession {
   serviceToken?: string
   llmBaseUrl?: string | null
   imageApiUrl?: string | null
+  fileApiUrl?: string | null
 }
 
 interface PlatformServiceEndpoint {
@@ -392,6 +393,10 @@ export async function cmdLogin(): Promise<void> {
 
   const llmEndpoint = bestEndpoint("llm.openai-compatible.default")
   const imageEndpoint = bestEndpoint("image.openai-compatible.default")
+  const fileEndpoint =
+    bestEndpoint("file.r2.default")
+    ?? bestEndpoint("file.object-storage.default")
+    ?? bestEndpoint("file.default")
 
   s3.stop("服务地址获取成功")
 
@@ -452,6 +457,7 @@ export async function cmdLogin(): Promise<void> {
     serviceToken,
     llmBaseUrl: llmEndpoint?.baseUrl ?? null,
     imageApiUrl: imageEndpoint ? `${imageEndpoint.baseUrl}/images` : null,
+    fileApiUrl: fileEndpoint?.baseUrl ?? null,
   } as StoredSession)
 
   // 打印结果
@@ -460,6 +466,7 @@ export async function cmdLogin(): Promise<void> {
   log.info(`用户    : ${session.user.email}`)
   if (llmEndpoint) log.info(`LLM     : ${llmEndpoint.baseUrl}`)
   if (imageEndpoint) log.info(`图像    : ${imageEndpoint.baseUrl}/images`)
+  if (fileEndpoint) log.info(`文件    : ${fileEndpoint.baseUrl}`)
   log.info(`配置    : ${opencodeConfig}`)
   log.info(`凭证    : ${DDM_AUTH_FILE}`)
 
@@ -477,6 +484,7 @@ export function checkAuth(): {
   serviceToken: string
   llmBaseUrl: string | null
   imageApiUrl: string | null
+  fileApiUrl: string | null
   user: { id: string; email: string; name: string }
 } | null {
   const session = readSession()
@@ -485,6 +493,7 @@ export function checkAuth(): {
     serviceToken: session.serviceToken,
     llmBaseUrl: session.llmBaseUrl ?? null,
     imageApiUrl: session.imageApiUrl ?? null,
+    fileApiUrl: session.fileApiUrl ?? null,
     user: session.user,
   }
 }
@@ -499,6 +508,7 @@ export async function cmdAuthCheck(): Promise<void> {
   if (auth) {
     log.success(`已登录: ${auth.user.email}`)
     if (auth.llmBaseUrl) log.info(`LLM: ${auth.llmBaseUrl}`)
+    if (auth.fileApiUrl) log.info(`文件: ${auth.fileApiUrl}`)
   } else {
     log.warn("未登录，请运行 ddm login")
     process.exitCode = 1

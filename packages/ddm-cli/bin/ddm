@@ -20871,6 +20871,7 @@ async function cmdLogin() {
   const bestEndpoint = (serviceId) => endpoints.filter((e2) => e2.serviceId === serviceId).sort((a, b2) => b2.priority - a.priority || (b2.weight ?? 100) - (a.weight ?? 100))[0];
   const llmEndpoint = bestEndpoint("llm.openai-compatible.default");
   const imageEndpoint = bestEndpoint("image.openai-compatible.default");
+  const fileEndpoint = bestEndpoint("file.r2.default") ?? bestEndpoint("file.object-storage.default") ?? bestEndpoint("file.default");
   s3.stop("服务地址获取成功");
   const s4 = J2();
   s4.start("写入 OpenCode provider 配置...");
@@ -20914,7 +20915,8 @@ async function cmdLogin() {
     ...session,
     serviceToken,
     llmBaseUrl: llmEndpoint?.baseUrl ?? null,
-    imageApiUrl: imageEndpoint ? `${imageEndpoint.baseUrl}/images` : null
+    imageApiUrl: imageEndpoint ? `${imageEndpoint.baseUrl}/images` : null,
+    fileApiUrl: fileEndpoint?.baseUrl ?? null
   });
   T2.info("");
   T2.success("登录完成！");
@@ -20923,6 +20925,8 @@ async function cmdLogin() {
     T2.info(`LLM     : ${llmEndpoint.baseUrl}`);
   if (imageEndpoint)
     T2.info(`图像    : ${imageEndpoint.baseUrl}/images`);
+  if (fileEndpoint)
+    T2.info(`文件    : ${fileEndpoint.baseUrl}`);
   T2.info(`配置    : ${opencodeConfig}`);
   T2.info(`凭证    : ${DDM_AUTH_FILE}`);
   Fe("Done");

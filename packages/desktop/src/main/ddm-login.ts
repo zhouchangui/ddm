@@ -6,7 +6,7 @@
  * 2. 未登录 → 弹一个原生 Electron 登录窗口（品牌页 + 登录按钮）
  *    - 点击登录 → 打开系统浏览器完成 OAuth
  *    - 回调成功 → 窗口关闭，继续启动
- * 3. 登录成功 → 把 serviceToken / llmBaseUrl / imageApiUrl 注入 process.env
+ * 3. 登录成功 → 把 serviceToken / llmBaseUrl / imageApiUrl / fileApiUrl 注入 process.env
  */
 
 import { existsSync, readFileSync, mkdirSync, writeFileSync } from "node:fs"
@@ -41,6 +41,7 @@ interface StoredSession {
   serviceToken?: string
   llmBaseUrl?: string | null
   imageApiUrl?: string | null
+  fileApiUrl?: string | null
 }
 
 // ─── 工具 ──────────────────────────────────────────────────────
@@ -83,10 +84,12 @@ function injectEnv(auth: StoredSession) {
     process.env.DDM_TOKEN = auth.serviceToken
     process.env.DDM_SERVICE_LLM_TOKEN = auth.serviceToken
     process.env.DDM_IMAGE_API_KEY = auth.serviceToken
+    process.env.DDM_FILE_API_KEY = auth.serviceToken
     logger.log("[ddm-login] DDM_TOKEN injected")
   }
   if (auth.llmBaseUrl) process.env.DDM_SERVICE_LLM_BASE_URL = auth.llmBaseUrl
   if (auth.imageApiUrl) process.env.DDM_IMAGE_API_URL = auth.imageApiUrl
+  if (auth.fileApiUrl) process.env.DDM_FILE_API_URL = auth.fileApiUrl
 }
 
 // ─── 写入 opencode.json ────────────────────────────────────────
@@ -207,12 +210,17 @@ async function runLoginFlow(): Promise<StoredSession | null> {
     )
     const best = (id: string) =>
       endpoints.endpoints.filter(e => e.service_id === id).sort((a, b) => b.priority - a.priority)[0]
+    const bestFile =
+      best("file.r2.default")
+      ?? best("file.object-storage.default")
+      ?? best("file.default")
 
     session.serviceToken = svcToken.token
     session.llmBaseUrl = best("llm.openai-compatible.default")?.base_url ?? null
     session.imageApiUrl = best("image.openai-compatible.default")
       ? `${best("image.openai-compatible.default")!.base_url}/images`
       : null
+    session.fileApiUrl = bestFile?.base_url ?? null
   }
 
   writeAuth(session)
