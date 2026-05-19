@@ -5,6 +5,7 @@ import { pathToFileURL } from "url"
 import { Effect, Layer, Result, Schema } from "effect"
 import { CrossSpawnSpawner } from "@opencode-ai/core/cross-spawn-spawner"
 import { ToolRegistry } from "@/tool/registry"
+import { Cron } from "@/cron/cron"
 import { Flag } from "@opencode-ai/core/flag/flag"
 import { disposeAllInstances, TestInstance } from "../fixture/fixture"
 import { testEffect } from "../lib/effect"
@@ -46,6 +47,7 @@ const registryLayer = ToolRegistry.layer.pipe(
   Layer.provide(Session.defaultLayer),
   Layer.provide(Provider.defaultLayer),
   Layer.provide(Git.defaultLayer),
+  Layer.provide(Cron.defaultLayer),
   Layer.provide(Reference.defaultLayer),
   Layer.provide(LSP.defaultLayer),
   Layer.provide(Instruction.defaultLayer),

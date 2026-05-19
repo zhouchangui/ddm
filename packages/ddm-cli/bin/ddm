@@ -14004,13 +14004,18 @@ function manifestAgentPaths(manifest) {
   return manifest.opencode?.agent ? [manifest.opencode.agent] : [];
 }
 function manifestOpencodeSkillPaths(manifest) {
-  return manifest.opencode?.skills ?? [];
+  return manifestOpencodeSkillEntries(manifest).map((e2) => e2.path);
+}
+function manifestOpencodeSkillEntries(manifest) {
+  return (manifest.opencode?.skills ?? []).map((entry) => {
+    if (typeof entry === "string")
+      return { path: entry };
+    return { path: entry.path, npmPackage: entry.npmPackage };
+  });
 }
 function manifestMediaPaths(manifest) {
   return [
-    manifest.media.avatar.path,
-    manifest.media.cover.path,
-    ...manifest.media.gallery.map((item) => item.path)
+    manifest.media.avatar.path
   ];
 }
 function manifestAgentCommandName(manifest) {
@@ -14062,6 +14067,8 @@ function validateManifest(data) {
       }
       if (typeof asset.path !== "string" || !isSafeRelativePath(asset.path) || !asset.path.startsWith("media/")) {
         errors.push(new ManifestValidationError(`${field}.path 必须是 media/ 下的安全相对路径`, `${field}.path`));
+      } else if (!asset.path.endsWith(".png")) {
+        errors.push(new ManifestValidationError(`${field}.path 必须是 PNG`, `${field}.path`));
       }
       if (typeof asset.alt !== "string" || !asset.alt.trim()) {
         errors.push(new ManifestValidationError(`${field}.alt 是必填字符串`, `${field}.alt`));
@@ -14074,13 +14081,11 @@ function validateManifest(data) {
       }
     };
     validateMediaAsset(media.avatar, "media.avatar");
-    validateMediaAsset(media.cover, "media.cover");
-    if (!Array.isArray(media.gallery) || media.gallery.length < 1) {
-      errors.push(new ManifestValidationError("media.gallery 至少需要 1 张图片", "media.gallery"));
-    } else {
-      for (const [index, item] of media.gallery.entries()) {
-        validateMediaAsset(item, `media.gallery.${index}`, true);
-      }
+    if (media.cover !== undefined) {
+      errors.push(new ManifestValidationError("media.cover 已取消，请只保留 media.avatar", "media.cover"));
+    }
+    if (media.gallery !== undefined) {
+      errors.push(new ManifestValidationError("media.gallery 已取消，请只保留 media.avatar", "media.gallery"));
     }
     const theme = media.theme;
     if (!theme || typeof theme !== "object" || Array.isArray(theme)) {
@@ -14113,9 +14118,23 @@ function validateManifest(data) {
     if (!Array.isArray(opencode.skills)) {
       errors.push(new ManifestValidationError("opencode.skills 必须是数组", "opencode.skills"));
     } else {
-      for (const [i, skillPath] of opencode.skills.entries()) {
-        if (typeof skillPath !== "string" || !isSafeRelativePath(skillPath)) {
-          errors.push(new ManifestValidationError(`opencode.skills[${i}] 必须是安全相对路径`, `opencode.skills.${i}`));
+      for (const [i, entry] of opencode.skills.entries()) {
+        if (typeof entry === "string") {
+          if (!isSafeRelativePath(entry)) {
+            errors.push(new ManifestValidationError(`opencode.skills[${i}] 必须是安全相对路径`, `opencode.skills.${i}`));
+          }
+        } else if (entry !== null && typeof entry === "object" && !Array.isArray(entry)) {
+          const obj = entry;
+          if (typeof obj.path !== "string" || !isSafeRelativePath(obj.path)) {
+            errors.push(new ManifestValidationError(`opencode.skills[${i}].path 必须是安全相对路径`, `opencode.skills.${i}.path`));
+          }
+          if (obj.npmPackage !== undefined) {
+            if (typeof obj.npmPackage !== "string" || !NPM_PACKAGE_RE.test(obj.npmPackage)) {
+              errors.push(new ManifestValidationError(`opencode.skills[${i}].npmPackage 必须匹配 @ddmnpm/<kebab-id>`, `opencode.skills.${i}.npmPackage`));
+            }
+          }
+        } else {
+          errors.push(new ManifestValidationError(`opencode.skills[${i}] 必须是字符串路径或 { path, npmPackage? } 对象`, `opencode.skills.${i}`));
         }
       }
     }
@@ -14127,6 +14146,16 @@ function validateManifest(data) {
     for (const field of ["skills", "mcp", "docker", "apps", "envVars"]) {
       if (deps[field] !== undefined && !Array.isArray(deps[field])) {
         errors.push(new ManifestValidationError(`dependencies.${field} 必须是数组`, `dependencies.${field}`));
+      }
+    }
+    if (Array.isArray(deps.skills)) {
+      for (const [i, skill] of deps.skills.entries()) {
+        const s = skill;
+        if (s.npmPackage !== undefined) {
+          if (typeof s.npmPackage !== "string" || !NPM_PACKAGE_RE.test(s.npmPackage)) {
+            errors.push(new ManifestValidationError(`dependencies.skills[${i}].npmPackage 必须匹配 @ddmnpm/<kebab-id>`, `dependencies.skills.${i}.npmPackage`));
+          }
+        }
       }
     }
   }
@@ -14167,8 +14196,9 @@ ${errors.map((e2) => `  - [${e2.field}] ${e2.message}`).join(`
   }
   return data;
 }
-var SCHEMA_VERSION = "1", ManifestValidationError;
+var SCHEMA_VERSION = "1", NPM_PACKAGE_RE, ManifestValidationError;
 var init_schema = __esm(() => {
+  NPM_PACKAGE_RE = /^@ddmnpm\/[a-z0-9]+(?:-[a-z0-9]+)*$/;
   ManifestValidationError = class ManifestValidationError extends Error {
     field;
     constructor(message, field) {
@@ -14317,6 +14347,36 @@ async function runCommand(cmd) {
   if (result.error)
     return { ok: false, stderr: result.error.message };
   return { ok: result.status === 0, stderr: "" };
+}
+async function installSkillFromNpm(npmPackage, skillId, skillsDir) {
+  const { spawnSync } = await import("node:child_process");
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "ddm-skill-"));
+  try {
+    fs.writeFileSync(path.join(tmpDir, "package.json"), JSON.stringify({ name: "ddm-skill-install-tmp", version: "0.0.0", private: true }), "utf8");
+    const result = spawnSync("npm", ["install", npmPackage], {
+      cwd: tmpDir,
+      stdio: "pipe",
+      encoding: "utf8"
+    });
+    if (result.status !== 0) {
+      const stderr = result.stderr ?? "";
+      return { ok: false, message: `npm install 失败: ${stderr.slice(0, 200)}` };
+    }
+    const pkgDir = path.join(tmpDir, "node_modules", ...npmPackage.split("/"));
+    if (!fs.existsSync(pkgDir)) {
+      return { ok: false, message: `安装后未找到包目录: ${pkgDir}` };
+    }
+    const skillContentDir = path.join(pkgDir, skillId);
+    if (!fs.existsSync(path.join(skillContentDir, "SKILL.md"))) {
+      return { ok: false, message: `SKILL.md not found in ${npmPackage}: expected at ${skillContentDir}/SKILL.md` };
+    }
+    const destDir = path.join(skillsDir, skillId);
+    fs.mkdirSync(destDir, { recursive: true });
+    fs.cpSync(skillContentDir, destDir, { recursive: true });
+    return { ok: true, message: `已从 npm 安装 ${npmPackage} 到 ${destDir}` };
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
 }
 function manifestPackageFiles(agentDir, manifest) {
   const files = new Set(["manifest.json"]);
@@ -14548,24 +14608,38 @@ async function cmdUnpack(opts) {
     copied++;
   }
   s1.stop(`已复制 ${copied} 个 agent 文件到 ${opencodeDir}/agent/`);
-  const bundledSkills = manifestOpencodeSkillPaths(manifest);
-  if (bundledSkills.length > 0) {
+  const bundledSkillEntries = manifestOpencodeSkillEntries(manifest);
+  if (bundledSkillEntries.length > 0) {
     const sSkills = J2();
     sSkills.start("复制包内专属 skills...");
     let skillFilesCopied = 0;
     const skillsDir = path.join(opencodeDir, "skills");
-    for (const skillPath of bundledSkills) {
+    for (const { path: skillPath, npmPackage } of bundledSkillEntries) {
       if (!isSafeRelativePath(skillPath)) {
         T2.warn(`跳过非法 skill 路径: ${skillPath}`);
         continue;
       }
-      if (!zipContainsPrefix(zip, skillPath) || !zip.file(`${skillPath.replace(/\/+$/, "")}/SKILL.md`)) {
+      const skillId = path.basename(skillPath);
+      const inZip = zipContainsPrefix(zip, skillPath) && !!zip.file(`${skillPath.replace(/\/+$/, "")}/SKILL.md`);
+      if (inZip) {
+        skillFilesCopied += await copyZipPrefix(zip, skillPath, path.join(skillsDir, skillId));
+      } else if (npmPackage) {
+        sSkills.stop("切换到 npm 安装模式");
+        const ns = J2();
+        ns.start(`从 npm 安装捆绑 skill: ${npmPackage}...`);
+        const r = await installSkillFromNpm(npmPackage, skillId, skillsDir);
+        if (r.ok) {
+          ns.stop(`✓ ${skillId} (npm: ${npmPackage})`);
+          skillFilesCopied++;
+        } else {
+          ns.stop(`✗ ${skillId} 安装失败: ${r.message}`, 1);
+        }
+        sSkills.start("继续复制其他 skills...");
+      } else {
         T2.warn(`manifest 中声明的 skill 目录不完整: ${skillPath}`);
-        continue;
       }
-      skillFilesCopied += await copyZipPrefix(zip, skillPath, path.join(skillsDir, path.basename(skillPath)));
     }
-    sSkills.stop(`已复制 ${skillFilesCopied} 个 skill 文件到 ${skillsDir}/`);
+    sSkills.stop(`已处理 ${skillFilesCopied} 个 skill 到 ${skillsDir}/`);
   }
   const deps = manifest.dependencies;
   if (opts.skipDeps) {
@@ -14576,6 +14650,7 @@ async function cmdUnpack(opts) {
     return;
   }
   if (deps.skills && deps.skills.length > 0) {
+    const skillsDir = path.join(opencodeDir, "skills");
     for (const skill of deps.skills) {
       if (!skill.name)
         continue;
@@ -14584,22 +14659,45 @@ async function cmdUnpack(opts) {
         T2.info(`skill 已存在，跳过安装: ${skill.name} (${existing})`);
         continue;
       }
-      if (!skill.installCommand) {
-        T2.warn(`skill 未安装且未声明 installCommand: ${skill.name}`);
+      if (skill.npmPackage) {
+        const s2 = J2();
+        s2.start(`从 npm 安装 skill: ${skill.npmPackage}...`);
+        const r = await installSkillFromNpm(skill.npmPackage, skill.name, skillsDir);
+        if (r.ok) {
+          s2.stop(`✓ ${skill.name} (npm: ${skill.npmPackage})`);
+        } else {
+          s2.stop(`✗ ${skill.name} npm 安装失败，尝试 installCommand...`, 1);
+          if (skill.installCommand) {
+            const s3 = J2();
+            s3.start(`fallback: ${skill.installCommand}`);
+            const r2 = await runCommand(skill.installCommand);
+            if (r2.ok) {
+              s3.stop(`✓ ${skill.name} (fallback)`);
+            } else {
+              s3.stop(`✗ ${skill.name} 安装失败`, 1);
+              if (!skill.required)
+                T2.warn("（此 skill 非必须，可跳过）");
+            }
+          } else if (skill.required) {
+            T2.warn(`必需 skill 安装失败且无 fallback: ${skill.name}`);
+          }
+        }
+      } else if (skill.installCommand) {
+        const s2 = J2();
+        s2.start(`安装 skill: ${skill.name}...`);
+        const r = await runCommand(skill.installCommand);
+        if (r.ok) {
+          s2.stop(`✓ ${skill.name}`);
+        } else {
+          s2.stop(`✗ ${skill.name} 安装失败`, 1);
+          T2.warn(`可手动运行: ${skill.installCommand}`);
+          if (!skill.required)
+            T2.warn("（此 skill 非必须，可跳过）");
+        }
+      } else {
+        T2.warn(`skill 未安装且未声明 npmPackage 或 installCommand: ${skill.name}`);
         if (skill.required)
           T2.warn("此 skill 标记为必需，请先按发布说明手动安装");
-        continue;
-      }
-      const s2 = J2();
-      s2.start(`安装 skill: ${skill.name}...`);
-      const r = await runCommand(skill.installCommand);
-      if (r.ok) {
-        s2.stop(`✓ ${skill.name}`);
-      } else {
-        s2.stop(`✗ ${skill.name} 安装失败`, 1);
-        T2.warn(`可手动运行: ${skill.installCommand}`);
-        if (!skill.required)
-          T2.warn("（此 skill 非必须，可跳过）");
       }
     }
   }
@@ -14660,7 +14758,7 @@ async function cmdUnpack(opts) {
   if (deps.apps && deps.apps.length > 0) {
     const platform2 = os.platform();
     const platformKey = platform2 === "darwin" ? "macos" : platform2 === "win32" ? "windows" : "linux";
-    const relevantApps = deps.apps.filter((a) => a.platform.includes(platformKey));
+    const relevantApps = deps.apps.filter((a) => a.platform?.includes(platformKey));
     if (relevantApps.length > 0) {
       T2.warn("以下应用需要手动安装：");
       for (const app of relevantApps) {
@@ -21111,40 +21209,18 @@ Windows Registry Editor Version 5.00
     }
   }
 }
-async function resolveMarketAgentUrl(input) {
+function isMarketAgentPageUrl(input) {
   if (!URL.canParse(input))
-    return;
+    return false;
   const parsed = new URL(input);
   const market = new URL(PLATFORM_WEB_BASE_URL);
   if (parsed.protocol !== "https:" || parsed.hostname !== market.hostname)
-    return;
+    return false;
   const [, kind, agentId] = parsed.pathname.split("/");
-  if (kind !== "agent" || !agentId)
-    return;
-  const query = new URL(`${SUPABASE_URL}/rest/v1/agents`);
-  query.searchParams.set("select", "id,latest_release_id,name");
-  query.searchParams.set("id", `eq.${agentId}`);
-  query.searchParams.set("status", "eq.published");
-  query.searchParams.set("show_in_market", "eq.true");
-  const resp = await fetch(query, {
-    headers: {
-      apikey: SUPABASE_ANON_KEY,
-      authorization: `Bearer ${SUPABASE_ANON_KEY}`,
-      accept: "application/json"
-    }
-  });
-  if (!resp.ok)
-    throw new Error(`读取市场 agent 失败: HTTP ${resp.status}`);
-  const rows = await resp.json();
-  const agent = Array.isArray(rows) && rows[0] && typeof rows[0] === "object" ? rows[0] : undefined;
-  const releaseId = agent && "latest_release_id" in agent ? agent.latest_release_id : undefined;
-  if (typeof releaseId !== "string" || releaseId.length === 0) {
-    throw new Error("该市场 agent 暂无可导入版本");
-  }
-  const download = new URL(`${SUPABASE_FUNCTIONS_URL}/download-agent-release`);
-  download.searchParams.set("releaseId", releaseId);
-  download.searchParams.set("source", "market");
-  return download.toString();
+  return kind === "agent" && !!agentId;
+}
+function isPlatformDownloadFunctionUrl(input) {
+  return URL.canParse(input) && new URL(input).pathname === "/functions/v1/download-agent-release";
 }
 async function resolveImportZip(input, quiet = false) {
   const pkgUrl = await (async () => {
@@ -21157,8 +21233,12 @@ async function resolveImportZip(input, quiet = false) {
     }
     if (URL.canParse(input)) {
       const parsed = new URL(input);
-      if (parsed.protocol === "https:")
-        return await resolveMarketAgentUrl(input) ?? input;
+      if (parsed.protocol === "https:") {
+        if (isMarketAgentPageUrl(input) || isPlatformDownloadFunctionUrl(input)) {
+          throw new Error("市场搭子请从官网详情页点击添加到工作台导入，CLI 只接收已授权的 agent 包地址。");
+        }
+        return input;
+      }
       throw new Error(`只允许 https:// 协议，拒绝: ${parsed.protocol}`);
     }
     return;
@@ -21169,6 +21249,9 @@ async function resolveImportZip(input, quiet = false) {
   const parsedUrl = new URL(pkgUrl);
   if (parsedUrl.protocol !== "https:")
     throw new Error(`只允许 https:// 协议，拒绝: ${parsedUrl.protocol}`);
+  if (isMarketAgentPageUrl(pkgUrl) || isPlatformDownloadFunctionUrl(pkgUrl)) {
+    throw new Error("市场搭子请从官网详情页点击添加到工作台导入，CLI 只接收已授权的 agent 包地址。");
+  }
   const s = quiet ? null : J2();
   s?.start(`下载 agent 包: ${pkgUrl}`);
   const resp = await fetch(pkgUrl);

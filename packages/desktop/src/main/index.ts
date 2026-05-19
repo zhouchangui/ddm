@@ -6,15 +6,14 @@ import { createServer } from "node:net"
 import { homedir, tmpdir } from "node:os"
 import { join } from "node:path"
 import { getCACertificates, setDefaultCACertificates } from "node:tls"
-import type { Event, MessageBoxOptions } from "electron"
-import { app, BrowserWindow, dialog } from "electron"
+import type { Event } from "electron"
+import { app, BrowserWindow } from "electron"
 
 import contextMenu from "electron-context-menu"
 
 import type { InitStep, ServerReadyData, SqliteMigrationProgress, WslConfig } from "../preload/types"
 import { checkAppExists, resolveAppPath, wslPath } from "./apps"
 import { CHANNEL, UPDATER_ENABLED } from "./constants"
-import { isDdmImportDeepLink, previewDdmImport, runDdmImport, type DdmImportManifest } from "./ddm-import"
 import { registerIpcHandlers, sendDeepLinks, sendMenuCommand, sendSqliteMigrationProgress } from "./ipc"
 import { initLogging } from "./logging"
 import { parseMarkdown } from "./markdown"
@@ -72,79 +71,8 @@ function useEnvProxy() {
 
 function emitDeepLinks(urls: string[]) {
   if (urls.length === 0) return
-  const imports = urls.filter(isDdmImportDeepLink)
-  for (const input of imports) {
-    void confirmAndRunDdmImport(input)
-  }
   pendingDeepLinks.push(...urls)
   if (mainWindow && !mainWindow.isDestroyed()) sendDeepLinks(mainWindow, urls)
-}
-
-function formatDdmImportPreview(manifest: DdmImportManifest) {
-  const deps = manifest.dependencies ?? {}
-  const depSummary = [
-    deps.skills?.length ? `Skills: ${deps.skills.map((item) => item.name).join(", ")}` : "",
-    deps.mcp?.length ? `MCP: ${deps.mcp.map((item) => item.name).join(", ")}` : "",
-    deps.docker?.length ? `Docker: ${deps.docker.map((item) => item.service).join(", ")}` : "",
-    deps.apps?.length ? `Apps: ${deps.apps.map((item) => item.name).join(", ")}` : "",
-    deps.envVars?.length ? `Env: ${deps.envVars.map((item) => item.key).join(", ")}` : "",
-  ].filter(Boolean)
-
-  return [
-    `${manifest.name} v${manifest.version}`,
-    manifest.summary,
-    "",
-    manifest.description,
-    "",
-    `Package: ${manifest.packageId}`,
-    `Agents: ${manifest.agents.join(", ")}`,
-    manifest.quickCommands.length ? `Quick commands: ${manifest.quickCommands.map((item) => item.label).join(", ")}` : "",
-    depSummary.length ? `Dependencies: ${depSummary.join("; ")}` : "Dependencies: none",
-    "",
-    `Change: ${manifest.changeSummary}`,
-  ]
-    .filter((line) => line !== "")
-    .join("\n")
-}
-
-async function confirmAndRunDdmImport(input: string) {
-  try {
-    const manifest = await previewDdmImport(input)
-    const confirmOptions: MessageBoxOptions = {
-      type: "question",
-      buttons: ["导入", "取消"],
-      defaultId: 0,
-      cancelId: 1,
-      title: "导入 DDM Agent",
-      message: "确认导入这个 OpenCode Agent？",
-      detail: formatDdmImportPreview(manifest),
-    }
-    const result = mainWindow
-      ? await dialog.showMessageBox(mainWindow, confirmOptions)
-      : await dialog.showMessageBox(confirmOptions)
-    if (result.response !== 0) return
-    await runDdmImport(input)
-    const doneOptions: MessageBoxOptions = {
-      type: "info",
-      buttons: ["知道了"],
-      title: "导入完成",
-      message: `${manifest.name} 已导入`,
-      detail: `重启或刷新后可使用 ${manifest.agents.join(", ")}。`,
-    }
-    if (mainWindow) await dialog.showMessageBox(mainWindow, doneOptions)
-    else await dialog.showMessageBox(doneOptions)
-  } catch (error) {
-    logger.error("ddm import failed", { error: error instanceof Error ? error.message : String(error) })
-    const errorOptions: MessageBoxOptions = {
-      type: "error",
-      buttons: ["知道了"],
-      title: "导入失败",
-      message: "DDM Agent 导入失败",
-      detail: error instanceof Error ? error.message : String(error),
-    }
-    if (mainWindow) await dialog.showMessageBox(mainWindow, errorOptions)
-    else await dialog.showMessageBox(errorOptions)
-  }
 }
 
 function setInitStep(step: InitStep) {

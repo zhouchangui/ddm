@@ -1,6 +1,7 @@
 import { PlanExitTool } from "./plan"
 import { Session } from "@/session/session"
 import { QuestionTool } from "./question"
+import { CronTool } from "./cron"
 import { ShellTool } from "./shell"
 import { EditTool } from "./edit"
 import { GlobTool } from "./glob"
@@ -50,6 +51,7 @@ import { Git } from "@/git"
 import { Skill } from "../skill"
 import { Permission } from "@/permission"
 import { Reference } from "@/reference/reference"
+import { Cron } from "@/cron/cron"
 
 const log = Log.create({ service: "tool.registry" })
 
@@ -85,6 +87,7 @@ export const layer: Layer.Layer<
   | Config.Service
   | Plugin.Service
   | Question.Service
+  | Cron.Service
   | Todo.Service
   | Agent.Service
   | Skill.Service
@@ -114,6 +117,7 @@ export const layer: Layer.Layer<
     const task = yield* TaskTool
     const read = yield* ReadTool
     const question = yield* QuestionTool
+    const cron = yield* CronTool
     const todo = yield* TodoWriteTool
     const lsptool = yield* LspTool
     const plan = yield* PlanExitTool
@@ -227,6 +231,7 @@ export const layer: Layer.Layer<
           skill: Tool.init(skilltool),
           patch: Tool.init(patchtool),
           question: Tool.init(question),
+          cron: Tool.init(cron),
           lsp: Tool.init(lsptool),
           plan: Tool.init(plan),
         })
@@ -236,6 +241,7 @@ export const layer: Layer.Layer<
           builtin: [
             tool.invalid,
             ...(questionEnabled ? [tool.question] : []),
+            tool.cron,
             tool.shell,
             tool.read,
             tool.glob,
@@ -362,6 +368,7 @@ export const defaultLayer = Layer.suspend(() =>
     Layer.provide(Config.defaultLayer),
     Layer.provide(Plugin.defaultLayer),
     Layer.provide(Question.defaultLayer),
+    Layer.provide(Cron.defaultLayer),
     Layer.provide(Todo.defaultLayer),
     Layer.provide(Skill.defaultLayer),
     Layer.provide(Agent.defaultLayer),

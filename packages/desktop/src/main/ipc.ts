@@ -24,9 +24,7 @@ import { setTitlebar, updateTitlebar } from "./windows"
 type DdmImportEnv = Record<string, string>
 
 const PLATFORM_WEB_BASE_URL = process.env.PLATFORM_WEB_BASE_URL ?? "https://www.bothub.run"
-const SUPABASE_URL = process.env.SUPABASE_URL ?? "https://kemfhphqsaxooafdmivq.supabase.co"
-const SUPABASE_ANON_KEY = process.env.SUPABASE_ANON_KEY ?? "sb_publishable_bMXQDnIXXnLZ_qqqKup3Ug_SwHbbu1F"
-const SUPABASE_FUNCTIONS_URL = `${SUPABASE_URL}/functions/v1`
+const DDM_MARKET_IMPORT_MESSAGE = "市场搭子请从官网详情页点击添加到工作台导入，桌面端只接收已授权的 agent 包地址。"
 
 const pickerFilters = (ext?: string[]) => {
   if (!ext || ext.length === 0) return undefined
@@ -40,41 +38,18 @@ const resolveDdmImportDownloadUrl = (input: string) => {
   return parsed.searchParams.get("url") ?? parsed.searchParams.get("pkg") ?? input
 }
 
-const resolveDdmMarketAgentUrl = async (input: string) => {
-  if (!URL.canParse(input)) return
+const isDdmMarketAgentPageUrl = (input: string) => {
+  if (!URL.canParse(input)) return false
   const parsed = new URL(input)
   const market = new URL(PLATFORM_WEB_BASE_URL)
-  if (parsed.protocol !== "https:" || parsed.hostname !== market.hostname) return
+  if (parsed.protocol !== "https:" || parsed.hostname !== market.hostname) return false
 
   const [, kind, agentId] = parsed.pathname.split("/")
-  if (kind !== "agent" || !agentId) return
-
-  const query = new URL(`${SUPABASE_URL}/rest/v1/agents`)
-  query.searchParams.set("select", "id,latest_release_id,name")
-  query.searchParams.set("id", `eq.${agentId}`)
-  query.searchParams.set("status", "eq.published")
-  query.searchParams.set("show_in_market", "eq.true")
-
-  const res = await fetch(query, {
-    headers: {
-      apikey: SUPABASE_ANON_KEY,
-      authorization: `Bearer ${SUPABASE_ANON_KEY}`,
-      accept: "application/json",
-    },
-  })
-  if (!res.ok) throw new Error(`读取市场 agent 失败: HTTP ${res.status}`)
-
-  const rows = (await res.json()) as unknown
-  const agent = Array.isArray(rows) && rows[0] && typeof rows[0] === "object" ? rows[0] : undefined
-  const releaseId =
-    agent && "latest_release_id" in agent ? (agent as { latest_release_id?: unknown }).latest_release_id : undefined
-  if (typeof releaseId !== "string" || releaseId.length === 0) throw new Error("该市场 agent 暂无可导入版本")
-
-  const download = new URL(`${SUPABASE_FUNCTIONS_URL}/download-agent-release`)
-  download.searchParams.set("releaseId", releaseId)
-  download.searchParams.set("source", "market")
-  return download.toString()
+  return kind === "agent" && !!agentId
 }
+
+const isDdmPlatformDownloadFunctionUrl = (input: string) =>
+  URL.canParse(input) && new URL(input).pathname === "/functions/v1/download-agent-release"
 
 const readEnvFile = (filePath: string) => {
   if (!existsSync(filePath)) return {}
@@ -269,7 +244,10 @@ const ddmImportCliBin = () => {
 
 const readDdmImportManifest = async (pkgUrl: string) => {
   const inputUrl = resolveDdmImportDownloadUrl(pkgUrl)
-  const downloadUrl = (await resolveDdmMarketAgentUrl(inputUrl)) ?? inputUrl
+  if (isDdmMarketAgentPageUrl(inputUrl) || isDdmPlatformDownloadFunctionUrl(inputUrl)) {
+    throw new Error(DDM_MARKET_IMPORT_MESSAGE)
+  }
+  const downloadUrl = inputUrl
   if (!URL.canParse(downloadUrl)) throw new Error("无效的 agent 包地址")
   if (new URL(downloadUrl).protocol !== "https:") throw new Error("只允许从 https:// 地址导入 agent 包")
 

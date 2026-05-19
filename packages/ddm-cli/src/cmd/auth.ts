@@ -648,43 +648,18 @@ Windows Registry Editor Version 5.00
 /**
  * ddm import <ddm://import?pkg=<url>>、<ddm://import-agent?url=<url>> 或 <path/to/file.zip>
  */
-async function resolveMarketAgentUrl(input: string): Promise<string | undefined> {
-  if (!URL.canParse(input)) return
-
+function isMarketAgentPageUrl(input: string): boolean {
+  if (!URL.canParse(input)) return false
   const parsed = new URL(input)
   const market = new URL(PLATFORM_WEB_BASE_URL)
-  if (parsed.protocol !== "https:" || parsed.hostname !== market.hostname) return
+  if (parsed.protocol !== "https:" || parsed.hostname !== market.hostname) return false
 
   const [, kind, agentId] = parsed.pathname.split("/")
-  if (kind !== "agent" || !agentId) return
+  return kind === "agent" && !!agentId
+}
 
-  const query = new URL(`${SUPABASE_URL}/rest/v1/agents`)
-  query.searchParams.set("select", "id,latest_release_id,name")
-  query.searchParams.set("id", `eq.${agentId}`)
-  query.searchParams.set("status", "eq.published")
-  query.searchParams.set("show_in_market", "eq.true")
-
-  const resp = await fetch(query, {
-    headers: {
-      apikey: SUPABASE_ANON_KEY,
-      authorization: `Bearer ${SUPABASE_ANON_KEY}`,
-      accept: "application/json",
-    },
-  })
-  if (!resp.ok) throw new Error(`读取市场 agent 失败: HTTP ${resp.status}`)
-
-  const rows = (await resp.json()) as unknown
-  const agent = Array.isArray(rows) && rows[0] && typeof rows[0] === "object" ? rows[0] : undefined
-  const releaseId =
-    agent && "latest_release_id" in agent ? (agent as { latest_release_id?: unknown }).latest_release_id : undefined
-  if (typeof releaseId !== "string" || releaseId.length === 0) {
-    throw new Error("该市场 agent 暂无可导入版本")
-  }
-
-  const download = new URL(`${SUPABASE_FUNCTIONS_URL}/download-agent-release`)
-  download.searchParams.set("releaseId", releaseId)
-  download.searchParams.set("source", "market")
-  return download.toString()
+function isPlatformDownloadFunctionUrl(input: string): boolean {
+  return URL.canParse(input) && new URL(input).pathname === "/functions/v1/download-agent-release"
 }
 
 async function resolveImportZip(input: string, quiet = false): Promise<{ zipPath: string; cleanup: () => void }> {
@@ -697,7 +672,12 @@ async function resolveImportZip(input: string, quiet = false): Promise<{ zipPath
     }
     if (URL.canParse(input)) {
       const parsed = new URL(input)
-      if (parsed.protocol === "https:") return (await resolveMarketAgentUrl(input)) ?? input
+      if (parsed.protocol === "https:") {
+        if (isMarketAgentPageUrl(input) || isPlatformDownloadFunctionUrl(input)) {
+          throw new Error("市场搭子请从官网详情页点击添加到工作台导入，CLI 只接收已授权的 agent 包地址。")
+        }
+        return input
+      }
       throw new Error(`只允许 https:// 协议，拒绝: ${parsed.protocol}`)
     }
     return
@@ -710,6 +690,9 @@ async function resolveImportZip(input: string, quiet = false): Promise<{ zipPath
   // 只允许 https:// 防止 SSRF（file://、http://、内网地址等）
   const parsedUrl = new URL(pkgUrl)
   if (parsedUrl.protocol !== "https:") throw new Error(`只允许 https:// 协议，拒绝: ${parsedUrl.protocol}`)
+  if (isMarketAgentPageUrl(pkgUrl) || isPlatformDownloadFunctionUrl(pkgUrl)) {
+    throw new Error("市场搭子请从官网详情页点击添加到工作台导入，CLI 只接收已授权的 agent 包地址。")
+  }
 
   const s = quiet ? null : spinner()
   s?.start(`下载 agent 包: ${pkgUrl}`)

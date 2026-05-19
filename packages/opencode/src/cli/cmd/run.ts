@@ -166,6 +166,11 @@ export const RunCommand = effectCmd({
         type: "string",
         describe: "agent to use",
       })
+      .option("strict-agent", {
+        type: "boolean",
+        default: false,
+        describe: "fail instead of falling back when the requested agent is missing or invalid",
+      })
       .option("format", {
         type: "string",
         choices: ["default", "json"],
@@ -499,30 +504,36 @@ export const RunCommand = effectCmd({
       }
 
       async function localAgent() {
+        if (args["strict-agent"] && !args.agent) {
+          die("--strict-agent requires --agent")
+        }
         if (!args.agent) return undefined
         const name = args.agent
 
-        const entry = await Effect.runPromise(agentSvc.get(name))
+        const exit = await Effect.runPromiseExit(agentSvc.get(name))
+        if (exit._tag === "Failure") {
+          if (args["strict-agent"]) die(`agent "${name}" not found`)
+          UI.println(UI.Style.TEXT_WARNING_BOLD + "!", UI.Style.TEXT_NORMAL, `agent "${name}" not found. Falling back to default agent`)
+          return undefined
+        }
+        const entry = exit.value
         if (!entry) {
-          UI.println(
-            UI.Style.TEXT_WARNING_BOLD + "!",
-            UI.Style.TEXT_NORMAL,
-            `agent "${name}" not found. Falling back to default agent`,
-          )
+          if (args["strict-agent"]) die(`agent "${name}" not found`)
+          UI.println(UI.Style.TEXT_WARNING_BOLD + "!", UI.Style.TEXT_NORMAL, `agent "${name}" not found. Falling back to default agent`)
           return undefined
         }
         if (entry.mode === "subagent") {
-          UI.println(
-            UI.Style.TEXT_WARNING_BOLD + "!",
-            UI.Style.TEXT_NORMAL,
-            `agent "${name}" is a subagent, not a primary agent. Falling back to default agent`,
-          )
+          if (args["strict-agent"]) die(`agent "${name}" is a subagent, not a primary agent`)
+          UI.println(UI.Style.TEXT_WARNING_BOLD + "!", UI.Style.TEXT_NORMAL, `agent "${name}" is a subagent, not a primary agent. Falling back to default agent`)
           return undefined
         }
         return name
       }
 
       async function attachAgent(sdk: OpencodeClient) {
+        if (args["strict-agent"] && !args.agent) {
+          die("--strict-agent requires --agent")
+        }
         if (!args.agent) return undefined
         const name = args.agent
 
@@ -532,30 +543,21 @@ export const RunCommand = effectCmd({
           .catch(() => undefined)
 
         if (!modes) {
-          UI.println(
-            UI.Style.TEXT_WARNING_BOLD + "!",
-            UI.Style.TEXT_NORMAL,
-            `failed to list agents from ${args.attach}. Falling back to default agent`,
-          )
+          if (args["strict-agent"]) die(`failed to list agents from ${args.attach}`)
+          UI.println(UI.Style.TEXT_WARNING_BOLD + "!", UI.Style.TEXT_NORMAL, `failed to list agents from ${args.attach}. Falling back to default agent`)
           return undefined
         }
 
         const agent = modes.find((a) => a.name === name)
         if (!agent) {
-          UI.println(
-            UI.Style.TEXT_WARNING_BOLD + "!",
-            UI.Style.TEXT_NORMAL,
-            `agent "${name}" not found. Falling back to default agent`,
-          )
+          if (args["strict-agent"]) die(`agent "${name}" not found`)
+          UI.println(UI.Style.TEXT_WARNING_BOLD + "!", UI.Style.TEXT_NORMAL, `agent "${name}" not found. Falling back to default agent`)
           return undefined
         }
 
         if (agent.mode === "subagent") {
-          UI.println(
-            UI.Style.TEXT_WARNING_BOLD + "!",
-            UI.Style.TEXT_NORMAL,
-            `agent "${name}" is a subagent, not a primary agent. Falling back to default agent`,
-          )
+          if (args["strict-agent"]) die(`agent "${name}" is a subagent, not a primary agent`)
+          UI.println(UI.Style.TEXT_WARNING_BOLD + "!", UI.Style.TEXT_NORMAL, `agent "${name}" is a subagent, not a primary agent. Falling back to default agent`)
           return undefined
         }
 

@@ -1,0 +1,6 @@
+Manage scheduled tasks bound to the current OpenCode conversation context.
+
+Use this tool to list, create, update, enable, disable, delete, or run cron
+tasks. By default, new tasks bind to the current agent, current session, and
+current working directory. In v1, agent/session/workdir bindings cannot be
+edited; delete and recreate the task instead.
