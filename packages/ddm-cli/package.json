@@ -1,6 +1,6 @@
 {
   "name": "@ddm/cli",
-  "version": "1.15.6",
+  "version": "1.15.7",
   "description": "DDM agent 打包、导入和平台登录工具",
   "type": "module",
   "bin": {
