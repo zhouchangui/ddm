@@ -242,7 +242,14 @@ export function DialogDdmImportAgent(props: { pkgUrl: string }) {
         })
         .filter((item): item is [string, string] => !!item),
     )
-  const sourceUrl = createMemo(() => preview()?.downloadUrl ?? props.pkgUrl)
+  const sourceUrl = createMemo(() => {
+    const raw = preview()?.downloadUrl ?? props.pkgUrl
+    try {
+      return new URL(raw).hostname
+    } catch {
+      return raw
+    }
+  })
   const appendProgress = (message: string) =>
     setProgress((current) => [...current.filter((line) => line !== message), message].slice(-8))
 
