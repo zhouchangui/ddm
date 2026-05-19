@@ -11,6 +11,7 @@ import {
   manifestAgentCommandName,
   manifestAgentPaths,
   manifestMediaPaths,
+  manifestOpencodeSkillEntries,
   manifestOpencodeSkillPaths,
   parseManifest,
 } from "../schema.js"
@@ -152,6 +153,56 @@ async function runCommand(cmd: string): Promise<{ ok: boolean; stderr: string }>
   const result = spawnSync(bin, args, { stdio: "inherit" })
   if (result.error) return { ok: false, stderr: result.error.message }
   return { ok: result.status === 0, stderr: "" }
+}
+
+/**
+ * 通过 npm 安装指定包并将技能目录复制到 opencodeDir/skills/<skillId>。
+ * 1. 在临时目录运行 `npm install <npmPackage>`
+ * 2. 从 node_modules 内找到 SKILL.md 并将整个包目录复制到 skillsDir/<skillId>
+ */
+async function installSkillFromNpm(
+  npmPackage: string,
+  skillId: string,
+  skillsDir: string,
+): Promise<{ ok: boolean; message: string }> {
+  const { spawnSync } = await import("node:child_process")
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "ddm-skill-"))
+  try {
+    // 写最小 package.json，防止 npm install 报"no package.json"
+    fs.writeFileSync(path.join(tmpDir, "package.json"), JSON.stringify({ name: "ddm-skill-install-tmp", version: "0.0.0", private: true }), "utf8")
+
+    const result = spawnSync("npm", ["install", npmPackage], {
+      cwd: tmpDir,
+      stdio: "pipe",
+      encoding: "utf8",
+    })
+
+    if (result.status !== 0) {
+      const stderr = result.stderr ?? ""
+      return { ok: false, message: `npm install 失败: ${stderr.slice(0, 200)}` }
+    }
+
+    // 推断包在 node_modules 中的路径（@scope/name → node_modules/@scope/name）
+    const pkgDir = path.join(tmpDir, "node_modules", ...npmPackage.split("/"))
+    if (!fs.existsSync(pkgDir)) {
+      return { ok: false, message: `安装后未找到包目录: ${pkgDir}` }
+    }
+
+    // 技能内容在包内的 <skillId>/ 子目录（publish-skill.mjs 约定的包结构）
+    const skillContentDir = path.join(pkgDir, skillId)
+    if (!fs.existsSync(path.join(skillContentDir, "SKILL.md"))) {
+      return { ok: false, message: `SKILL.md not found in ${npmPackage}: expected at ${skillContentDir}/SKILL.md` }
+    }
+
+    // 将技能内容复制到 skillsDir/<skillId>（不包含 package.json 等包元数据）
+    const destDir = path.join(skillsDir, skillId)
+    fs.mkdirSync(destDir, { recursive: true })
+    fs.cpSync(skillContentDir, destDir, { recursive: true })
+    return { ok: true, message: `已从 npm 安装 ${npmPackage} 到 ${destDir}` }
+  } finally {
+    // 清理临时目录
+    fs.rmSync(tmpDir, { recursive: true, force: true })
+  }
 }
 
 function manifestPackageFiles(agentDir: string, manifest: AgentManifest): string[] | undefined {
@@ -449,24 +500,41 @@ export async function cmdUnpack(opts: UnpackOptions): Promise<void> {
   }
   s1.stop(`已复制 ${copied} 个 agent 文件到 ${opencodeDir}/agent/`)
 
-  const bundledSkills = manifestOpencodeSkillPaths(manifest)
-  if (bundledSkills.length > 0) {
+  const bundledSkillEntries = manifestOpencodeSkillEntries(manifest)
+  if (bundledSkillEntries.length > 0) {
     const sSkills = spinner()
     sSkills.start("复制包内专属 skills...")
     let skillFilesCopied = 0
     const skillsDir = path.join(opencodeDir, "skills")
-    for (const skillPath of bundledSkills) {
+    for (const { path: skillPath, npmPackage } of bundledSkillEntries) {
       if (!isSafeRelativePath(skillPath)) {
         log.warn(`跳过非法 skill 路径: ${skillPath}`)
         continue
       }
-      if (!zipContainsPrefix(zip, skillPath) || !zip.file(`${skillPath.replace(/\/+$/, "")}/SKILL.md`)) {
+      const skillId = path.basename(skillPath)
+      const inZip = zipContainsPrefix(zip, skillPath) && !!zip.file(`${skillPath.replace(/\/+$/, "")}/SKILL.md`)
+
+      if (inZip) {
+        // zip 内有完整 skill：直接解压（优先）
+        skillFilesCopied += await copyZipPrefix(zip, skillPath, path.join(skillsDir, skillId))
+      } else if (npmPackage) {
+        // zip 中无 skill 但有 npmPackage：从 npm 安装
+        sSkills.stop("切换到 npm 安装模式")
+        const ns = spinner()
+        ns.start(`从 npm 安装捆绑 skill: ${npmPackage}...`)
+        const r = await installSkillFromNpm(npmPackage, skillId, skillsDir)
+        if (r.ok) {
+          ns.stop(`✓ ${skillId} (npm: ${npmPackage})`)
+          skillFilesCopied++
+        } else {
+          ns.stop(`✗ ${skillId} 安装失败: ${r.message}`, 1)
+        }
+        sSkills.start("继续复制其他 skills...")
+      } else {
         log.warn(`manifest 中声明的 skill 目录不完整: ${skillPath}`)
-        continue
       }
-      skillFilesCopied += await copyZipPrefix(zip, skillPath, path.join(skillsDir, path.basename(skillPath)))
     }
-    sSkills.stop(`已复制 ${skillFilesCopied} 个 skill 文件到 ${skillsDir}/`)
+    sSkills.stop(`已处理 ${skillFilesCopied} 个 skill 到 ${skillsDir}/`)
   }
 
   const deps = manifest.dependencies
@@ -479,8 +547,9 @@ export async function cmdUnpack(opts: UnpackOptions): Promise<void> {
     return
   }
 
-  // 2. 安装 Skills
+  // 2. 安装 Skills（deps.skills：优先 npmPackage，其次 installCommand）
   if (deps.skills && deps.skills.length > 0) {
+    const skillsDir = path.join(opencodeDir, "skills")
     for (const skill of deps.skills) {
       if (!skill.name) continue
       const existing = installedSkillLocation(skill.name, opts.target)
@@ -489,21 +558,44 @@ export async function cmdUnpack(opts: UnpackOptions): Promise<void> {
         continue
       }
 
-      if (!skill.installCommand) {
-        log.warn(`skill 未安装且未声明 installCommand: ${skill.name}`)
-        if (skill.required) log.warn("此 skill 标记为必需，请先按发布说明手动安装")
-        continue
-      }
-
-      const s2 = spinner()
-      s2.start(`安装 skill: ${skill.name}...`)
-      const r = await runCommand(skill.installCommand)
-      if (r.ok) {
-        s2.stop(`✓ ${skill.name}`)
+      if (skill.npmPackage) {
+        // 优先走 npm 安装路径，将 skill 安装到 opencodeDir/skills/<name>
+        const s2 = spinner()
+        s2.start(`从 npm 安装 skill: ${skill.npmPackage}...`)
+        const r = await installSkillFromNpm(skill.npmPackage, skill.name, skillsDir)
+        if (r.ok) {
+          s2.stop(`✓ ${skill.name} (npm: ${skill.npmPackage})`)
+        } else {
+          s2.stop(`✗ ${skill.name} npm 安装失败，尝试 installCommand...`, 1)
+          // npm 失败 → fallback 到 installCommand
+          if (skill.installCommand) {
+            const s3 = spinner()
+            s3.start(`fallback: ${skill.installCommand}`)
+            const r2 = await runCommand(skill.installCommand)
+            if (r2.ok) {
+              s3.stop(`✓ ${skill.name} (fallback)`)
+            } else {
+              s3.stop(`✗ ${skill.name} 安装失败`, 1)
+              if (!skill.required) log.warn("（此 skill 非必须，可跳过）")
+            }
+          } else if (skill.required) {
+            log.warn(`必需 skill 安装失败且无 fallback: ${skill.name}`)
+          }
+        }
+      } else if (skill.installCommand) {
+        const s2 = spinner()
+        s2.start(`安装 skill: ${skill.name}...`)
+        const r = await runCommand(skill.installCommand)
+        if (r.ok) {
+          s2.stop(`✓ ${skill.name}`)
+        } else {
+          s2.stop(`✗ ${skill.name} 安装失败`, 1)
+          log.warn(`可手动运行: ${skill.installCommand}`)
+          if (!skill.required) log.warn("（此 skill 非必须，可跳过）")
+        }
       } else {
-        s2.stop(`✗ ${skill.name} 安装失败`, 1)
-        log.warn(`可手动运行: ${skill.installCommand}`)
-        if (!skill.required) log.warn("（此 skill 非必须，可跳过）")
+        log.warn(`skill 未安装且未声明 npmPackage 或 installCommand: ${skill.name}`)
+        if (skill.required) log.warn("此 skill 标记为必需，请先按发布说明手动安装")
       }
     }
   }
@@ -573,7 +665,7 @@ export async function cmdUnpack(opts: UnpackOptions): Promise<void> {
   if (deps.apps && deps.apps.length > 0) {
     const platform = os.platform() as "darwin" | "win32" | "linux"
     const platformKey = platform === "darwin" ? "macos" : platform === "win32" ? "windows" : "linux"
-    const relevantApps = deps.apps.filter((a) => a.platform.includes(platformKey))
+    const relevantApps = deps.apps.filter((a) => a.platform?.includes(platformKey))
     if (relevantApps.length > 0) {
       log.warn("以下应用需要手动安装：")
       for (const app of relevantApps) {

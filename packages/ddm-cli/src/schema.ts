@@ -13,7 +13,9 @@ export const SCHEMA_VERSION = "1" as const
 export interface SkillDep {
   /** skill 的唯一标识，用于日志和去重检查 */
   name: string
-  /** 完整的安装命令，unpack 时原样执行 */
+  /** npm 包名，优先使用此字段安装；必须匹配 @ddmnpm/<kebab-id> 格式 */
+  npmPackage?: string
+  /** 完整的安装命令，npmPackage 未设置时使用；unpack 时原样执行 */
   installCommand?: string
   /** 这个 skill 的用途说明（人读） */
   description: string
@@ -96,12 +98,20 @@ export interface Dependencies {
   envVars?: EnvVarDep[]
 }
 
+/** 捆绑技能条目：字符串路径或带 npm 包名的对象（两种格式均合法） */
+export type SkillEntry = string | { path: string; npmPackage?: string }
+
 /** OpenCode 运行时文件入口 */
 export interface OpencodeManifest {
   /** agent 定义文件路径，例如 "visual-designer.md" */
   agent: string
-  /** 包内专属技能目录，例如 ["skills/visual-research"] */
-  skills: string[]
+  /**
+   * 包内专属技能目录。
+   * 支持两种格式：
+   *   - 字符串：`"skills/visual-research"`
+   *   - 对象：`{ path: "skills/visual-research", npmPackage: "@ddmnpm/visual-research" }`
+   */
+  skills: SkillEntry[]
 }
 
 /** 定时任务声明，由导入器或平台调度系统安装 */
@@ -129,8 +139,6 @@ export interface GalleryMediaAsset extends MediaAsset {
 
 export interface AgentMedia {
   avatar: MediaAsset
-  cover: MediaAsset
-  gallery: GalleryMediaAsset[]
   theme: {
     accent: string
     background: string
@@ -205,19 +213,29 @@ function pathIsAbsolute(value: string): boolean {
   return value.startsWith("/") || /^[A-Za-z]:[\\/]/.test(value)
 }
 
+/** @ddmnpm/<kebab-id> 格式校验 */
+const NPM_PACKAGE_RE = /^@ddmnpm\/[a-z0-9]+(?:-[a-z0-9]+)*$/
+
 export function manifestAgentPaths(manifest: AgentManifest): string[] {
   return manifest.opencode?.agent ? [manifest.opencode.agent] : []
 }
 
+/** 返回所有捆绑技能的路径列表（兼容字符串和对象两种格式） */
 export function manifestOpencodeSkillPaths(manifest: AgentManifest): string[] {
-  return manifest.opencode?.skills ?? []
+  return manifestOpencodeSkillEntries(manifest).map((e) => e.path)
+}
+
+/** 返回所有捆绑技能的完整条目（含可选 npmPackage 字段） */
+export function manifestOpencodeSkillEntries(manifest: AgentManifest): Array<{ path: string; npmPackage?: string }> {
+  return (manifest.opencode?.skills ?? []).map((entry) => {
+    if (typeof entry === "string") return { path: entry }
+    return { path: entry.path, npmPackage: entry.npmPackage }
+  })
 }
 
 export function manifestMediaPaths(manifest: AgentManifest): string[] {
   return [
     manifest.media.avatar.path,
-    manifest.media.cover.path,
-    ...manifest.media.gallery.map((item) => item.path),
   ]
 }
 
@@ -296,6 +314,8 @@ export function validateManifest(data: unknown): ManifestValidationError[] {
       }
       if (typeof asset.path !== "string" || !isSafeRelativePath(asset.path) || !asset.path.startsWith("media/")) {
         errors.push(new ManifestValidationError(`${field}.path 必须是 media/ 下的安全相对路径`, `${field}.path`))
+      } else if (!asset.path.endsWith(".png")) {
+        errors.push(new ManifestValidationError(`${field}.path 必须是 PNG`, `${field}.path`))
       }
       if (typeof asset.alt !== "string" || !asset.alt.trim()) {
         errors.push(new ManifestValidationError(`${field}.alt 是必填字符串`, `${field}.alt`))
@@ -309,13 +329,11 @@ export function validateManifest(data: unknown): ManifestValidationError[] {
     }
 
     validateMediaAsset(media.avatar, "media.avatar")
-    validateMediaAsset(media.cover, "media.cover")
-    if (!Array.isArray(media.gallery) || media.gallery.length < 1) {
-      errors.push(new ManifestValidationError("media.gallery 至少需要 1 张图片", "media.gallery"))
-    } else {
-      for (const [index, item] of media.gallery.entries()) {
-        validateMediaAsset(item, `media.gallery.${index}`, true)
-      }
+    if (media.cover !== undefined) {
+      errors.push(new ManifestValidationError("media.cover 已取消，请只保留 media.avatar", "media.cover"))
+    }
+    if (media.gallery !== undefined) {
+      errors.push(new ManifestValidationError("media.gallery 已取消，请只保留 media.avatar", "media.gallery"))
     }
     const theme = media.theme as Record<string, unknown> | undefined
     if (!theme || typeof theme !== "object" || Array.isArray(theme)) {
@@ -351,9 +369,37 @@ export function validateManifest(data: unknown): ManifestValidationError[] {
     if (!Array.isArray(opencode.skills)) {
       errors.push(new ManifestValidationError("opencode.skills 必须是数组", "opencode.skills"))
     } else {
-      for (const [i, skillPath] of opencode.skills.entries()) {
-        if (typeof skillPath !== "string" || !isSafeRelativePath(skillPath)) {
-          errors.push(new ManifestValidationError(`opencode.skills[${i}] 必须是安全相对路径`, `opencode.skills.${i}`))
+      for (const [i, entry] of opencode.skills.entries()) {
+        if (typeof entry === "string") {
+          // 字符串格式：直接验证路径安全性
+          if (!isSafeRelativePath(entry)) {
+            errors.push(new ManifestValidationError(`opencode.skills[${i}] 必须是安全相对路径`, `opencode.skills.${i}`))
+          }
+        } else if (entry !== null && typeof entry === "object" && !Array.isArray(entry)) {
+          // 对象格式：{ path, npmPackage? }
+          const obj = entry as Record<string, unknown>
+          if (typeof obj.path !== "string" || !isSafeRelativePath(obj.path as string)) {
+            errors.push(
+              new ManifestValidationError(`opencode.skills[${i}].path 必须是安全相对路径`, `opencode.skills.${i}.path`),
+            )
+          }
+          if (obj.npmPackage !== undefined) {
+            if (typeof obj.npmPackage !== "string" || !NPM_PACKAGE_RE.test(obj.npmPackage as string)) {
+              errors.push(
+                new ManifestValidationError(
+                  `opencode.skills[${i}].npmPackage 必须匹配 @ddmnpm/<kebab-id>`,
+                  `opencode.skills.${i}.npmPackage`,
+                ),
+              )
+            }
+          }
+        } else {
+          errors.push(
+            new ManifestValidationError(
+              `opencode.skills[${i}] 必须是字符串路径或 { path, npmPackage? } 对象`,
+              `opencode.skills.${i}`,
+            ),
+          )
         }
       }
     }
@@ -366,6 +412,22 @@ export function validateManifest(data: unknown): ManifestValidationError[] {
     for (const field of ["skills", "mcp", "docker", "apps", "envVars"] as const) {
       if (deps[field] !== undefined && !Array.isArray(deps[field])) {
         errors.push(new ManifestValidationError(`dependencies.${field} 必须是数组`, `dependencies.${field}`))
+      }
+    }
+    // 验证 dependencies.skills[].npmPackage 格式
+    if (Array.isArray(deps.skills)) {
+      for (const [i, skill] of (deps.skills as unknown[]).entries()) {
+        const s = skill as Record<string, unknown>
+        if (s.npmPackage !== undefined) {
+          if (typeof s.npmPackage !== "string" || !NPM_PACKAGE_RE.test(s.npmPackage as string)) {
+            errors.push(
+              new ManifestValidationError(
+                `dependencies.skills[${i}].npmPackage 必须匹配 @ddmnpm/<kebab-id>`,
+                `dependencies.skills.${i}.npmPackage`,
+              ),
+            )
+          }
+        }
       }
     }
   }
